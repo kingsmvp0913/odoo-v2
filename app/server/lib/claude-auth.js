@@ -59,6 +59,62 @@ function getClaudeAuthEnv() {
   return tok ? { CLAUDE_CODE_OAUTH_TOKEN: tok } : {};
 }
 
+class NoAnthropicKeyError extends Error {
+  constructor(msg) { super(msg); this.code = 'NO_ANTHROPIC_KEY'; }
+}
+
+/**
+ * buildClaudeAuthEnv(userId) — 這一次執行該用誰的 Anthropic 憑證（階段 3：客戶自帶 API key）。
+ *
+ * ⚠ **非同步只發生在這裡，不在讀取端**。檔頭寫明 getClaudeAuthEnv() 刻意同步——runClaude
+ * 若改成 await 查 DB，spawn 會晚一個 microtask，而既有測試多是「呼叫後同步對 mock child
+ * 發事件」，會整片失效。所以呼叫端先 await 這支拿到結果，再以參數傳進 runClaude。
+ *
+ * 形狀照抄 lib/git-identity.js 的 buildGitEnv()，但**優先序相反**：
+ * GIT 是「個人優先、沒有才退公司」；這裡是「公司自己的 key 優先」——客戶自帶 key 的意思
+ * 就是那筆錢算客戶的。
+ *
+ * ⚠ **客戶公司沒有 key 時必須丟例外，不可以退回平台那把共用訂閱。**
+ * companies.is_internal 的欄位註解已經寫明：客戶公司被誤標成內部，就會用平台的訂閱跑客戶
+ * 的 AI，違反 Anthropic 條款。靜默退回等於同一件事——而且更難發現，因為它不會報錯，
+ * 只會在月底的帳單上出現。
+ *
+ * 回傳只含**一把**憑證：官方優先序是 ANTHROPIC_AUTH_TOKEN > ANTHROPIC_API_KEY >
+ * CLAUDE_CODE_OAUTH_TOKEN（見 shadowingEnvVar()），兩把都給的話實際生效的是哪一把
+ * 要靠讀者記得這條優先序，那是留給未來的人踩的坑。
+ */
+async function buildClaudeAuthEnv(userId) {
+  // 系統觸發（cron、夜間批次、系統自動 push）沒有發起人：用平台訂閱，且**不查 DB**——
+  // 落點不受 DB 狀態影響，不可能因為查詢結果而飄到某家客戶的憑證上。
+  if (userId === null || userId === undefined) return getClaudeAuthEnv();
+
+  const { rows } = await query(
+    `SELECT u.company_id, c.is_internal, c.anthropic_key_enc
+       FROM users u
+       LEFT JOIN companies c ON c.id = u.company_id
+      WHERE u.id = $1`,
+    [userId]
+  );
+  const r = rows[0];
+
+  // 查不到人、或這個人沒有公司（平台管理員永遠沒有公司）→ 平台訂閱。
+  if (!r || r.company_id === null || r.company_id === undefined) return getClaudeAuthEnv();
+  // 內部公司＝廠商自己，本來就用平台訂閱（is_internal 欄位註解的原話）。
+  if (r.is_internal === true) return getClaudeAuthEnv();
+
+  // 以下是客戶公司。
+  if (!r.anthropic_key_enc) {
+    throw new NoAnthropicKeyError('這家公司還沒有設定 Anthropic API key，AI 無法執行。請公司管理員在設定頁填入。');
+  }
+  // 停用或到期的公司，它的憑證不可以再被拿來跑 AI（規格 §7）。HTTP 那側的全域閘門擋得住
+  // 網頁操作，但 cron、夜間批次、系統觸發的執行不經過 HTTP——與 buildGitEnv 同一個理由。
+  const { isUserCompanyUsable } = require('./tenant-access');
+  if (!await isUserCompanyUsable(userId)) {
+    throw new NoAnthropicKeyError('這家公司已停用或不在使用期間，不能再用它的憑證執行 AI。');
+  }
+  return { ANTHROPIC_API_KEY: decrypt(r.anthropic_key_enc) };
+}
+
 // 用量量測要拿「指定的那一把」去打 usage API，而不是永遠打本機憑證檔
 function getTokenFor(which) {
   return (which === 'backup' ? _backupToken : _token) || null;
@@ -94,7 +150,7 @@ function _setForTesting(token, backupToken = null, active = 'primary') {
 }
 
 module.exports = {
-  loadClaudeToken, getClaudeAuthEnv, getTokenFor, hasBackupToken,
+  loadClaudeToken, getClaudeAuthEnv, buildClaudeAuthEnv, NoAnthropicKeyError, getTokenFor, hasBackupToken,
   getActiveCredential, setActiveCredential, resetClaudeTokenCache,
   shadowingEnvVar, _setForTesting
 };

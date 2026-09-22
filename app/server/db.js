@@ -1265,6 +1265,11 @@ async function migrate() {
     // 用 JSONB 一欄而不是一欄一個布林——功能會一直加，每加一個就改一次 schema 划不來。
     // 預設 NULL＝什麼功能都沒開（客戶安全值）；「沒有公司」的人（平台管理員）由程式判斷為全開，不靠這個欄位。
     { table: 'companies', col: 'features', sql: 'ALTER TABLE companies ADD COLUMN features JSONB' },
+    // 階段 3（客戶自帶 API key）：客戶公司的 Anthropic 憑證，密文存放，解密只在組子行程 env 時發生。
+    // ⚠ 刻意**不設**預設值也不回填：沒有 key 的客戶公司必須「跑不起來並說清楚」，
+    // 不可以悄悄退回平台那把共用訂閱——那等於廠商替客戶付錢，而 companies.is_internal
+    // 的註解已經寫明那違反 Anthropic 條款。內部公司不需要這一欄（它本來就用平台訂閱）。
+    { table: 'companies', col: 'anthropic_key_enc', sql: 'ALTER TABLE companies ADD COLUMN anthropic_key_enc TEXT' },
     // systemd 目標的 odoo 執行檔絕對路徑。NULL＝退回裸名 `odoo-bin`（PATH 上找得到的機器行為不變）。
     // ⚠ 慈雲那台就是 PATH 上沒有：升級指令一送出去就 `sudo: odoo-bin: command not found`、exit 1、
     // 整批回滾，而部署 log 只有那一行——看起來像客戶的模組壞了，實際上碼連被讀到都沒有。
