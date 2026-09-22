@@ -747,3 +747,40 @@ describe('公司管理頁：詳細畫面的四個分頁與四顆開關', () => {
       .toBe('常駐紅色區塊: true');
   });
 });
+
+// 2026-09-22 使用者裁決：內部公司的「可上正式」顯示成**開**且停用，不是關。
+// 理由：後端不接受 can_release=true（400，規格 §4.3），所以 DB 裡永遠是 false——但顯示成
+// 「關」會被讀成「內部公司不能上正式」，那是假的。canReleaseProject 對平台管理員直接回 true、
+// 根本不看這個欄位，而內部同仁有 9 個是平台管理員。畫面要講的是「這家公司的人上得了正式」
+// 這件事實，不是 DB 欄位的原值。
+// 這條很容易被後人當成 bug「修正」回去（看起來像把 false 畫成 true），所以正反兩面都釘。
+describe('公司管理頁：內部公司的「可上正式」刻意顯示成開', () => {
+  const cell = (() => {
+    const at = COMPANY_ADMIN.indexOf('<td data-label="可上正式">');
+    const end = COMPANY_ADMIN.indexOf('</td>', at);
+    return at < 0 || end < 0 ? '' : COMPANY_ADMIN.slice(at, end);
+  })();
+
+  test('那一格切得到（切不到的話下面幾條全是假綠）', () => {
+    expect(`可上正式那一格: ${cell.length > 300}`).toBe('可上正式那一格: true');
+  });
+
+  test('內部公司顯示成開，一般公司照讀 row.can_release', () => {
+    expect(`顯示條件: ${/:checked="selected\.is_internal \? true : row\.can_release"/.test(cell)}`)
+      .toBe('顯示條件: true');
+  });
+
+  // 顯示成開但沒停用＝按得下去、送出去、吃一個 400——比顯示成關更糟。兩件事必須成對。
+  test('顯示成開的同時必須停用', () => {
+    expect(`停用條件: ${/:disabled="[^"]*selected\.is_internal[^"]*"/.test(cell)}`)
+      .toBe('停用條件: true');
+  });
+
+  // title 是這個畫面唯一說得出「為什麼」的地方，而且必須點出那個例外：
+  // 內部公司若有 company_admin，他不吃平台管理員那條捷徑，也就不受這個「開」的保護。
+  test('滑上去講得出原因，而且點出公司管理員這個例外', () => {
+    for (const marker of ['平台管理員', '公司管理員']) {
+      expect(`${marker}: ${cell.includes(marker)}`).toBe(`${marker}: true`);
+    }
+  });
+});

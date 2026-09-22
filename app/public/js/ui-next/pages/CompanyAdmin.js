@@ -473,11 +473,16 @@
                   <tr v-for="row in boundProjects" :key="row.project_id">
                     <td data-label="專案">{{ row.name }}</td>
                     <td data-label="可上正式">
-                      <!-- 內部公司不得勾「可上正式」（後端 400，規格 §4.3）。下方「新增綁定」那顆
-                           一直是停用的，已綁定的這顆卻不是——使用者按得下去、等一輪、再吃一個紅色錯誤。
-                           條件與新增綁定那顆同一個（selected.is_internal），停用才是誠實的畫面。 -->
-                      <label class="ui-next-toggle" :title="selected.is_internal ? '內部公司的綁定不能勾這個' : null">
-                        <input type="checkbox" :checked="row.can_release"
+                      <!-- 內部公司：後端不接受 can_release=true（400，規格 §4.3），所以這一欄
+                           在 DB 裡永遠是 false。但顯示成「關」會讀成「內部公司不能上正式」，那是假的——
+                           內部同仁裡有 9 個是平台管理員，而 canReleaseProject 對平台管理員直接回 true，
+                           根本不看這個欄位。所以這裡刻意顯示成「開」並停用：畫面講的是「這家公司的人
+                           上得了正式」這件事實，不是 DB 欄位的原值。
+                           ⚠ 唯一的例外寫在 title 裡：內部公司若有 company_admin，他不吃平台管理員那條
+                           捷徑，也就不受這個「開」的保護——那種帳號今天確實存在一個。 -->
+                      <label class="ui-next-toggle"
+                             :title="selected.is_internal ? '內部公司的成員多半是平台管理員，平台管理員不受這個開關限制，一律上得了正式；這個欄位因此不開放設定。若這家公司有「公司管理員」角色的帳號，他不在此列。' : null">
+                        <input type="checkbox" :checked="selected.is_internal ? true : row.can_release"
                                :disabled="!!releaseBusy[row.project_id] || selected.is_internal"
                                @change="toggleCanRelease(row)">
                         <span></span>
