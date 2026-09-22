@@ -160,3 +160,48 @@ describe('平台管理員不能把自己鎖在門外', () => {
     expect((await one('SELECT display_name FROM users WHERE id=$1', [selfId])).display_name).toBe('平台管理員（改過名）');
   });
 });
+
+// ── 列表要回得出「這個帳號屬於哪家公司」（2026-09-22 補）──────────────────────
+// 意圖：多租戶平台上這是列表最重要的一欄，而且「變更角色」要靠 company_id 才預選得出
+// 目前的公司。真正要釘死的是 LEFT JOIN：改成內連接，每一位平台管理員（他們本來就沒有
+// 公司）都會從使用者列表裡靜默消失——畫面看起來完全正常，只是少了人。
+describe('GET /api/admin/users 帶出公司', () => {
+  let rows;
+
+  beforeAll(async () => {
+    const res = await request(app).get('/api/admin/users').set(as(adminToken));
+    expect(res.status).toBe(200);
+    rows = res.body;
+    // 掃描出來的清單先釘筆數：列表空掉時下面每一條 find 都會變成無聲通過。
+    expect(rows.length).toBeGreaterThanOrEqual(3);
+  });
+
+  test('沒有公司的平台管理員照樣在列表裡（LEFT JOIN，不是 JOIN）', () => {
+    const admins = rows.filter(u => u.role === 'admin');
+    expect(admins.length).toBeGreaterThanOrEqual(2);
+    for (const a of admins) {
+      expect(a.company_id).toBeNull();
+      expect(a.company_name).toBeNull();
+    }
+  });
+
+  test('有公司的帳號回得出 company_id 與公司名稱（只回 id 的話畫面得再打一支端點去對照）', () => {
+    const withCo = rows.find(r => r.company_id === coA);
+    expect(withCo).toBeDefined();
+    expect(withCo.company_name).toBe('甲客戶');
+  });
+
+  test('company_id 這個鍵一定存在（前端拿它預選公司，undefined 與 null 在下拉上是兩回事）', () => {
+    for (const r of rows) {
+      expect(Object.prototype.hasOwnProperty.call(r, 'company_id')).toBe(true);
+      expect(Object.prototype.hasOwnProperty.call(r, 'company_name')).toBe(true);
+    }
+  });
+
+  test('加了 JOIN 之後 has_pat 仍是布林，且仍不吐 PAT 密文', () => {
+    for (const r of rows) {
+      expect(typeof r.has_pat).toBe('boolean');
+      expect(r.github_pat_enc).toBeUndefined();
+    }
+  });
+});

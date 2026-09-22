@@ -269,6 +269,37 @@ describe('使用者管理頁：建帳號與改角色都帶著公司', () => {
     expect(ADMIN_USERS).toMatch(/Api\.get\('admin\/companies'\)/);
   });
 
+  // GET /api/admin/users 補上 company_id 之前，這個視窗一律留空逼人重選一次公司——
+  // 「只想改角色」變成「順手把人搬去別家公司」的機會。預選退回去不會壞掉任何東西，
+  // 只會安靜地把那個機會放回來，所以釘住它。
+  test('改角色：公司預選帳號目前所屬的公司，不再逼人每次重挑', () => {
+    const open = ADMIN_USERS.slice(
+      ADMIN_USERS.indexOf('openRoleEdit(user)'),
+      ADMIN_USERS.indexOf('async submitRoleEdit()')
+    );
+    expect(open.length).toBeGreaterThan(80); // 切不到就不是綠燈，是守衛失效
+    expect(`openRoleEdit 預選目前公司: ${/company_id:\s*user\.company_id/.test(open)}`)
+      .toBe('openRoleEdit 預選目前公司: true');
+  });
+
+  // 掃描產生的清單一律先釘筆數（本檔開頭的規矩）：骨架與資料列各一格。
+  // 骨架少一格，載入完的表會整個跳位（同一份表已因此在 data-label 上吃過虧）。
+  const companyCells = ADMIN_USERS.match(/<td data-label="所屬公司"[\s\S]*?<\/td>/g) || [];
+
+  test('所屬公司欄在骨架與資料列都在（各一格）', () => {
+    expect(companyCells).toHaveLength(2);
+  });
+
+  // 平台管理員沒有公司是 validateRoleCompany 規定的，不是資料掉了。
+  // 顯示成空白／破折號會讓人以為列表壞了，進而去「修好」它——而唯一的修法是給他一家公司，
+  // 那正是後端會擋下來的事。
+  test('平台管理員的「沒有公司」要讀起來是設計如此，不是缺資料', () => {
+    const dataCell = companyCells.find((c) => c.includes('company_name')) || '';
+    expect(dataCell.length).toBeGreaterThan(80);
+    expect(`所屬公司資料格標示平台管理員: ${/u\.role === 'admin'[\s\S]*?全平台/.test(dataCell)}`)
+      .toBe('所屬公司資料格標示平台管理員: true');
+  });
+
   // I7：自助註冊已關閉，approved=false 只剩「被公司管理員停用」一個意思。
   // 註解要先剝掉——檔裡的註解本身就在講「不要再說待審核」，字面掃描會被它誤判。
   test('畫面上不得再出現「待審核」，也不得把重新啟用說成「核准」', () => {

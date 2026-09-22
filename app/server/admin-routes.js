@@ -326,10 +326,17 @@ function registerRoutes(app) {
     try {
       // has_pat 只回布林不回密文（比照 claude-token 端點）——「CLI 推送身分」下拉要據此
       // 標出誰選了會失敗，選人當下就看得出來，而不是 push 到一半才拿到 NoGitCredentialError。
+      // 多租戶平台上「這個帳號屬於哪家公司」是列表最重要的一欄，而且「變更角色」要靠
+      // company_id 預選目前的公司，否則每次只改角色也得把公司重挑一次。
+      // LEFT JOIN 而不是 JOIN（比照 auth.js verifyToken）——平台管理員本來就沒有公司，
+      // 內連接會把每一位管理員從使用者列表裡靜默刪掉。
       const { rows } = await query(
-        `SELECT id, username, display_name, role, approved, created_at,
-                (github_pat_enc IS NOT NULL AND github_pat_enc <> '') AS has_pat
-         FROM users ORDER BY id ASC`
+        `SELECT u.id, u.username, u.display_name, u.role, u.approved, u.created_at, u.company_id,
+                c.name AS company_name,
+                (u.github_pat_enc IS NOT NULL AND u.github_pat_enc <> '') AS has_pat
+         FROM users u
+         LEFT JOIN companies c ON c.id = u.company_id
+         ORDER BY u.id ASC`
       );
       res.json(rows);
     } catch (err) { res.status(500).json({ error: err.message }); }

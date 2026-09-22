@@ -110,11 +110,11 @@
         } catch (e) { showToast(e.message, 'error'); }
         finally { this.savingUser = false; }
       },
-      // 列表端點（GET /api/admin/users）不回 company_id，帶不出「他現在在哪家公司」，
-      // 所以改成非平台管理員時一律重選一次公司：猜一個預設值等於在沒人看見的情況下
-      // 把人搬到別家公司去。
+      // 列表端點（GET /api/admin/users）現在回 company_id（LEFT JOIN companies），
+      // 所以預選得出「他現在在哪家公司」。原本一律留空是因為那個欄位當時拿不到，
+      // 逼得管理員只改角色也得把公司重挑一次——重挑才是真正會把人搬去別家公司的那一步。
       openRoleEdit(user) {
-        this.roleEdit = { user, role: user.role, company_id: null };
+        this.roleEdit = { user, role: user.role, company_id: user.company_id || null };
       },
       async submitRoleEdit() {
         const { user, role, company_id } = this.roleEdit;
@@ -185,12 +185,13 @@
                  ——屬性缺席時 ::before 仍佔位，那 88px 的欄名縮排會空在骨架左邊。 -->
             <div class="table-wrap table-cards-sm">
               <table class="data-table">
-                <thead><tr><th>帳號</th><th>顯示名稱</th><th>角色</th><th>建立時間</th><th>操作</th></tr></thead>
+                <thead><tr><th>帳號</th><th>顯示名稱</th><th>角色</th><th>所屬公司</th><th>建立時間</th><th>操作</th></tr></thead>
                 <tbody>
                   <tr v-for="i in 4" :key="i">
                     <td data-label="帳號"><Skeleton width="90px" /></td>
                     <td data-label="顯示名稱"><Skeleton width="110px" /></td>
                     <td data-label="角色"><Skeleton width="50px" /></td>
+                    <td data-label="所屬公司"><Skeleton width="70px" /></td>
                     <td data-label="建立時間"><Skeleton width="80px" /></td>
                     <td data-label="操作"><Skeleton width="140px" /></td>
                   </tr>
@@ -216,6 +217,7 @@
                     <th>帳號</th>
                     <th>顯示名稱</th>
                     <th>角色</th>
+                    <th>所屬公司</th>
                     <th>建立時間</th>
                     <th>操作</th>
                   </tr>
@@ -235,6 +237,15 @@
                       <span v-if="lockMap[u.username] && lockMap[u.username].locked" class="pill pill-warn" style="margin-left:6px">鎖定 {{ lockMap[u.username].locked }}</span>
                       <span v-if="lockMap[u.username] && lockMap[u.username].blocked" class="pill pill-danger" style="margin-left:6px">封鎖 {{ lockMap[u.username].blocked }}</span>
                     </td>
+                    <!-- 平台管理員沒有公司是設計如此（validateRoleCompany：admin 必須沒有公司），
+                         所以寫成「全平台」而不是留白或破折號——留白讀起來像資料掉了。
+                         反過來說，非管理員沒有公司才真的是壞資料（後端現在建不出這種帳號，
+                         只可能是遷移前的殘留），那個才該標紅要人去處理。 -->
+                    <td data-label="所屬公司">
+                      <span v-if="u.role === 'admin'" style="color:var(--text-muted)">全平台</span>
+                      <span v-else-if="u.company_name">{{ u.company_name }}</span>
+                      <span v-else class="pill pill-danger">未指定公司</span>
+                    </td>
                     <td data-label="建立時間" style="font-size:var(--fs-sm);color:var(--text-muted)">
                       {{ new Date(u.created_at).toLocaleDateString('zh-TW') }}
                     </td>
@@ -250,7 +261,7 @@
                     </td>
                   </tr>
                   <tr v-if="filteredUsers.length === 0" class="empty-row">
-                    <td colspan="5">沒有符合的使用者</td>
+                    <td colspan="6">沒有符合的使用者</td>
                   </tr>
                 </tbody>
               </table>
@@ -315,7 +326,7 @@
                   <option value="admin">平台管理員</option>
                 </select>
               </div>
-              <!-- 列表端點不回 company_id，所以這裡沒有「目前公司」可以預選，一律重選一次。 -->
+              <!-- 目前的公司由 openRoleEdit 從列表的 company_id 預選好，只改角色時不必重挑。 -->
               <div v-if="roleEdit.role !== 'admin'" class="form-group" style="margin:0">
                 <label>所屬公司</label>
                 <select v-model="roleEdit.company_id" class="form-control">
