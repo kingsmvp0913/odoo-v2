@@ -1145,6 +1145,16 @@ async function migrate() {
     // 批次只要有合併就會 restartSelf()（docker restart 自己的容器），記憶體旗標隨之歸零，
     // 同一晚會再開第二批、把剛失敗的候選重跑一遍（白花錢，且 fix_attempts 一晚加兩次）。
     { table: 'teams_settings', col: 'nightly_fix_last_day', sql: 'ALTER TABLE teams_settings ADD COLUMN nightly_fix_last_day TEXT' },
+    // 平台更版機制（規格 §4.3）：維護時段設定與「這一場跑過了」的旗標。
+    // release_window：JSON 的 { weekdays, startHour, durationHours }。**NULL＝沒設定＝機制整條是關的**
+    //   ——沒有人按下同意，平台就不准自己在週末重啟客戶。
+    // release_last_window：已經嘗試過的那一場時段的開始時間（ISO）。⚠ 必須落 DB：更版就是
+    //   docker restart 自己的容器，記憶體旗標活不過那一下，同一場時段會被無限重啟。
+    // release_last_result：上一次更版嘗試的結果（JSON）。裁決二「紅燈只在畫面上通知」的唯一落點
+    //   ——這台沒有 webhook 也沒有 Teams，不寫進來的話「半夜全跑紅了」只剩一行會被輪替掉的 stdout。
+    { table: 'teams_settings', col: 'release_window', sql: 'ALTER TABLE teams_settings ADD COLUMN release_window TEXT' },
+    { table: 'teams_settings', col: 'release_last_window', sql: 'ALTER TABLE teams_settings ADD COLUMN release_last_window TEXT' },
+    { table: 'teams_settings', col: 'release_last_result', sql: 'ALTER TABLE teams_settings ADD COLUMN release_last_result TEXT' },
     // 子專案 0：AI 容器隔離的開關與資源上限。mode 預設 off——合併進 master 不改變任何行為。
     // 上限三個（agent 與閘道各一組）沒設就不准跑容器（總覽 D6），值由量測後管理員寫入，不在這裡猜。
     { table: 'teams_settings', col: 'agent_sandbox_mode', sql: "ALTER TABLE teams_settings ADD COLUMN agent_sandbox_mode TEXT DEFAULT 'off'" },

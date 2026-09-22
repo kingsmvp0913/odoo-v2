@@ -102,6 +102,9 @@ let _clockForTesting = null;
 let _lastShutdownDay = null; // 同一天只觸發一次夜間關機（過了預定時刻才補跑，見 tick 內說明）
 let _lastArchiveDay = null;  // 同一天只封存一次（同上，過了預定時刻才補跑）
 let _lastBackupDay = null;   // 平台 DB 備份同一天只試一次；重啟後歸零，但今天的檔已存在會直接跳過
+// 更版流程的 promise。tick 不等它（見下方呼叫處），但測試要等得到才能斷言「有沒有真的重啟」；
+// 記它一手比讓測試去猜幾個 microtask 可靠。正式流程不讀這個值。
+let _releaseTickPromise = null;
 // 3-I2：夜間批次（意見回饋通道）自己的節流旗標，與健檢的 shouldRunHealthCheck 完全脫鉤——
 // HEALTH_CHECK_INTERVAL_MS=0（健檢停用）或健檢卡在 running 都不該連坐把這條通道一起停掉。
 // ⚠ 這個「今天跑過了」只能落 DB，不能存記憶體：批次只要有合併就會 restartSelf()
@@ -248,6 +251,46 @@ function nightlyFixNextRunAt(now, lastRunDay) {
   return healthCheckTargetAt(now, (alreadyRan || hour >= HEALTH_CHECK_HOUR) ? 1 : 0).toISOString();
 }
 
+const WEEKDAY_LABELS = ['日', '一', '二', '三', '四', '五', '六'];
+
+// 排程頁那一列的文字。**「下一次維護時段是什麼時候」只有這裡看得到**，而且上一次更版的結果
+// （尤其是「全跑紅了所以沒重啟」）也只能從這裡與更版頁看到——這台沒有 webhook／Teams，
+// 不寫在畫面上就等於沒有人會知道。任何一項查不到都只讓那一項降級，不讓整張排程表掛掉。
+async function describeReleaseWindow(now) {
+  const release = require('./pipeline/release');
+  const cfg = await release.releaseWindowConfig().catch(() => null);
+  if (!cfg) {
+    return { timing: '未設定', enabled: false, nextRunAt: null,
+      note: '尚未設定維護時段，平台不會自動重啟——已合併的修正會一直停在待更版，直到有人設定時段或手動更版。' };
+  }
+  const last = await release.lastReleaseResult().catch(() => null);
+  const pending = await release.pendingReleases().then(r => r.length).catch(() => null);
+  const next = nextWindowOf(cfg, now);
+  const parts = [
+    '只有在有待更版的修正時才會重啟；重啟前對 master 跑一次全套測試，紅了就不重啟、碼留到下一個時段。',
+    `離時段結束剩 ${Math.round(release.RELEASE_ABORT_BEFORE_END_MS / 60000)} 分鐘仍有任務在飛時會強制中止並照常重啟，被中止的任務在平台重啟後會自動從同一關重跑。`,
+    pending == null ? '待更版筆數查詢失敗。' : `目前待更版 ${pending} 筆。`,
+  ];
+  if (last) {
+    const when = new Date(last.windowStart || last.at).toLocaleString('zh-TW');
+    parts.push(last.restarted
+      ? `上一次（${when}）已重啟，讓 ${last.released || 0} 筆修正生效。`
+      : `⚠ 上一次（${when}）沒有重啟：${last.reason || '原因未記錄'}`);
+  }
+  parts.push('⚠ 更版結果只會顯示在畫面上（本機沒有 webhook／Teams），不登入就不會知道。');
+  return {
+    timing: `每週${cfg.weekdays.map(d => WEEKDAY_LABELS[d]).join('、')} ${String(cfg.startHour).padStart(2, '0')}:00 起 ${cfg.durationHours} 小時`,
+    enabled: true,
+    nextRunAt: next ? next.toISOString() : null,
+    note: parts.join(''),
+  };
+}
+
+// 時段內時 nextWindow 回的是「現在這一場」的開始（Task 1 刻意如此，別誤判成已經過期）。
+function nextWindowOf(cfg, now) {
+  return require('./lib/release-window').nextWindow(cfg, now);
+}
+
 // 管理工具的排程清單：cron 內的行為才列入，不把 API 的人工觸發誤寫成排程。
 // 各使用者同步與閒置回收的精確下次時間只存在記憶體且各自不同，因此明確標示無單一時刻。
 async function getCronSchedules(now = new Date()) {
@@ -261,6 +304,7 @@ async function getCronSchedules(now = new Date()) {
   const hourlyAt = new Date(now);
   hourlyAt.setMinutes(0, 0, 0);
   hourlyAt.setHours(hourlyAt.getHours() + 1);
+  const release = await describeReleaseWindow(now);
   return [
     { id: 'cron-tick', name: '排程主迴圈', timing: '每分鐘', enabled: true, nextRunAt: nextMinuteAt(now), note: '所有背景工作的派送入口。' },
     { id: 'usage-gate', name: '用量閘門檢查', timing: '每分鐘', enabled: true, nextRunAt: nextMinuteAt(now), note: '跨過用量門檻時發出通知。' },
@@ -272,6 +316,9 @@ async function getCronSchedules(now = new Date()) {
     // 無人監督就會動 production 的排程，卻是唯一在排程頁看不到的——不列出來，「昨晚到底有沒有
     // 跑」在畫面上無處可查（它沒候選時連 health_check_runs 都不建）。
     { id: 'nightly-fix', name: '夜間改善批次', timing: `每日 ${String(HEALTH_CHECK_HOUR).padStart(2, '0')}:00（臺灣時間）；健檢跑完接著執行`, enabled: true, nextRunAt: nightlyFixNextRunAt(now, nightlyFixLastDay), note: '把已核准的意見回饋與健檢提案自動改碼、跑測試、審核後合併並重啟。沒有候選時仍會啟動但不做事，且不留執行紀錄；「今天已跑過」記在 DB，平台重啟（含批次自己的重啟）不會讓它同一晚再跑一次。' },
+    // 更版維護時段。這一列是裁決二（紅燈只在畫面上通知）能落地的地方之一：這台沒有 webhook
+    // 也沒有 Teams，上一次半夜全跑紅了、碼還沒上線這件事，只能靠畫面說出來。
+    { id: 'release-window', name: '平台更版維護時段', timing: release.timing, enabled: release.enabled, nextRunAt: release.nextRunAt, note: release.note },
     { id: 'nightly-shutdown', name: '測試區夜間關機', timing: `每日 ${shutdownTime}（${shutdownTz}）`, enabled: true, nextRunAt: null, note: '每天只執行一次；若錯過整點，之後的 tick 會補跑。' },
     { id: 'idle-sweep', name: '閒置測試區回收', timing: minuteLabel(IDLE_SWEEP_INTERVAL_MS), enabled: IDLE_SWEEP_INTERVAL_MS > 0, nextRunAt: null, note: '只回收沒有進行中任務的測試區。' },
     { id: 'hourly-maintenance', name: '每小時維護', timing: '每小時整點', enabled: true, nextRunAt: hourlyAt.toISOString(), note: `清理過期事件、log、token 用量與收件匣；非測試模式時套用已分類 wiki 漂移，並把停在執行中超過 ${Math.round(staleRunning.STALE_RUNNING_HOURS / 24)} 天的殘留任務標為失敗待確認。` },
@@ -408,6 +455,17 @@ function startCron() {
         } catch (err) { console.error('[CRON] nightly fix schedule:', err.message); }
       }
 
+      // 平台更版的維護時段（規格 §4.3）。判斷順序全在 release.js 的 releaseTick 裡，這裡只負責
+      // 「每分鐘打一通」——時段、已跑過、有沒有待更版、在飛任務怎麼辦，都是那支的責任。
+      // ⚠ 刻意不 await：restartNow 會先跑一次全套測試（實測約 15 分鐘），await 它等於讓整個
+      // 排程停擺十幾分鐘；更糟的是全跑若卡住，cron 會跟著永久死掉。比照夜間批次的既有作法
+      // （runNightlyFix 也是 fire-and-forget），重入由 releaseTick 自己的 DB 旗標＋行程內鎖擋。
+      try {
+        const { releaseTick } = require('./pipeline/release');
+        _releaseTickPromise = releaseTick({ now: _clockForTesting ? _clockForTesting() : new Date() })
+          .catch(err => { console.error('[CRON] release window:', err.message); });
+      } catch (err) { console.error('[CRON] release window schedule:', err.message); }
+
       // 這裡刻意沒有「兩個同步都關就 return」的提前結束。關閉同步是「不要去外部撈單」，與
       // 「要不要推進 pipeline」「要不要做清理排程」「要不要管理測試區」都無關——共用一個 return
       // 會讓管理員把同步關掉的同時，整個平台停止推進任務（任務凍在原狀態）、自動封存與各項清理
@@ -523,5 +581,7 @@ function _resetNightlyFixStateForTesting() {
   return query('UPDATE teams_settings SET nightly_fix_last_day = NULL WHERE id = 1').catch(() => {});
 }
 function _setClockForTesting(clock) { _clockForTesting = clock; }
+// 測試用：tick 不等更版流程跑完（見呼叫處），要斷言它的效果就 await 這個 promise。
+function _pendingReleaseTickForTesting() { return _releaseTickPromise; }
 
-module.exports = { startCron, stopCron, runForUser, autoArchiveDone, cleanupOldTaskEvents, cleanupOldDeployLogs, cleanupOldTokenUsage, cleanupOldInboxRows, getHealthCheckSchedule, healthCheckCadence, getCronSchedules, _resetShutdownStateForTesting, _resetArchiveStateForTesting, _resetBackupStateForTesting, _resetNightlyFixStateForTesting, _setClockForTesting };
+module.exports = { startCron, stopCron, runForUser, autoArchiveDone, cleanupOldTaskEvents, cleanupOldDeployLogs, cleanupOldTokenUsage, cleanupOldInboxRows, getHealthCheckSchedule, healthCheckCadence, getCronSchedules, _resetShutdownStateForTesting, _resetArchiveStateForTesting, _resetBackupStateForTesting, _resetNightlyFixStateForTesting, _setClockForTesting, _pendingReleaseTickForTesting };
