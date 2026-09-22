@@ -155,7 +155,11 @@ describe('GET /api/admin/release 回得出那三個問題的答案', () => {
     expect(res.body.window.configured).toBe(true);
     expect(res.body.window.inWindow).toBe(true);
     expect(res.body.window.nextWindowAt).not.toBeNull();
-    expect(res.body.abortMinutes).toBe(30);   // 裁決三的門檻要看得到，不是只寫在碼裡
+    // 裁決三的門檻要看得到，不是只寫在碼裡。2026-09-22 從 30 分鐘改成 5 分鐘：舊值是從
+    // 「全跑約 15 分鐘」這個沒量過的數字推出來的，實測是 115 秒（見 pipeline/release.js）。
+    // 這裡對回 release.js 的常數而不是寫死 5，免得兩邊哪天各說各話。
+    expect(res.body.abortMinutes)
+      .toBe(Math.round(require('../pipeline/release').RELEASE_ABORT_BEFORE_END_MS / 60000));
   });
 
   test('沒設定時段：configured=false，而且預填值不等於「已經在跑」', async () => {

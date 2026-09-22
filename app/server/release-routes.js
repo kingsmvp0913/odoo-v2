@@ -111,7 +111,8 @@ async function recordResult(record) {
 
 /**
  * 「立刻更版」的實際工作。**背景跑、不佔著 HTTP 連線**：restartNow 會先跑一次全套測試，
- * 實測約 15 分鐘（Task 3 實量），掛在請求上必定逾時，而逾時的那一端看到的是「失敗」——
+ * 實測 115 秒（2026-09-22 實量，見 pipeline/release.js 的 RELEASE_ABORT_BEFORE_END_MS），
+ * 掛在請求上仍可能逾時，而逾時的那一端看到的是「失敗」——
  * 但那時測試其實還在跑，重按就變成兩份全跑同時在燒同一台機器。
  * 結果寫進 release_last_result，前端輪詢同一支 GET 就看得到（成功的話平台會重啟，
  * 畫面本來就會斷線重連）。
@@ -272,7 +273,7 @@ function registerRoutes(app) {
       }
       const skipTests = !!(req.body && req.body.skipTests);
       _manualRun = { startedAt: new Date().toISOString(), by: req.userId, skipTests };
-      // fire-and-forget：全跑十幾分鐘，掛在請求上必定逾時（比照 admin-routes 的健檢與索引重建）。
+      // fire-and-forget：全跑兩分鐘上下、機器忙時更久，掛在請求上會逾時（比照 admin-routes 的健檢與索引重建）。
       runManualRelease({ userId: req.userId, skipTests, abortInflight })
         .catch(err => console.error('[RELEASE] 立刻更版：', err.message))
         .finally(() => { _manualRun = null; });

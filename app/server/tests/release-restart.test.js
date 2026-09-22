@@ -167,6 +167,99 @@ describe('restartNow', () => {
 
 });
 
+describe('重啟指令失敗（標記已經寫下去，行程卻還活著）', () => {
+  // 這一組守的是整條路徑上最危險的狀態：DB 裡寫著「這一批上線了」而平台其實沒重啟。
+  // 那種狀態是靜默的——待更版清單空掉＝更版頁全綠、下一個時段判「沒東西要上」直接結束，
+  // 於是這批碼再也不會被上線，平台無限期跑舊碼。標記不能搬到重啟之後（指令會把行程帶走），
+  // 所以唯一的解法是「失敗時把標記收回來」，而 docker restart 失敗時行程還活著，做得到。
+  const failRestart = msg => mockExecFile.mockImplementation((cmd, args, cb) => cb(new Error(msg)));
+  // ⚠ 檔頭的 beforeEach 只做 mockClear（清呼叫紀錄，不清 implementation），所以這裡覆寫過的
+  // 失敗行為會漏給後面每一支測試——把「重啟成功」全變成「重啟失敗」，而症狀出現在別的檔案段落。
+  afterEach(() => mockExecFile.mockImplementation((cmd, args, cb) => cb && cb(null, { stdout: '', stderr: '' })));
+
+  let envSeq = 0;
+  async function seedRunningEnv() {
+    // 每次只留這一台：captureRunningEnvs 撈的是全表，留著上一支測試的環境會讓斷言飄。
+    await dbModule.query('DELETE FROM odoo_envs');
+    // projects.name 有唯一鍵，固定名字會在第二支測試撞主鍵（症狀是 SQL 錯而不是斷言紅）。
+    const { rows: [p] } = await dbModule.query(
+      'INSERT INTO projects (name, odoo_version) VALUES ($1, $2) RETURNING id',
+      [`更版失敗測試專案 ${++envSeq}`, '17.0']);
+    await dbModule.query(
+      'INSERT INTO odoo_envs (project_id, status, port) VALUES ($1,$2,$3)', [p.id, 'running', 21099]);
+    return p.id;
+  }
+
+  test('回滾成待更版：不回滾的話清單永遠是空的，畫面全綠而平台永遠跑舊碼', async () => {
+    useFakeTimers();
+    try {
+      const { findingId, fixId } = await seedFix('merged');
+      await seedRunningEnv();
+      await require('../pipeline/maintenance').enterMaintenance(60 * 60 * 1000);
+      await release.restartNow({ userId: 7 });
+      // 標記此刻已經寫下去了（上面那幾支測試釘住的行為），指令還沒送出
+      expect((await fixRow(fixId)).status).toBe('released');
+
+      failRestart('Cannot connect to the Docker daemon at unix:///var/run/docker.sock');
+      jest.runAllTimers();
+      await release._pendingRestartFailureForTesting();
+
+      const f = await findingRow(findingId);
+      expect(`fix: ${(await fixRow(fixId)).status} / finding: ${f.status} / applied_at 清掉: ${f.applied_at === null}`)
+        .toBe('fix: merged / finding: approved / applied_at 清掉: true');
+      // 真正要守的是這一句：下一個時段（或人工按「立刻更版」）找得到東西要上
+      expect((await release.pendingReleases()).length).toBe(1);
+    } finally { jest.useRealTimers(); }
+  });
+
+  test('待重開測試區的清單要清掉：沒重啟卻留著，將來某次不相干的開機會把一批測試區翻出來重開', async () => {
+    useFakeTimers();
+    try {
+      await seedFix('merged');
+      const projectId = await seedRunningEnv();
+      await release.restartNow({ userId: 7 });
+      expect(await release.readEnvsToRevive()).toEqual([projectId]);
+
+      failRestart('daemon busy');
+      jest.runAllTimers();
+      await release._pendingRestartFailureForTesting();
+      expect(await release.readEnvsToRevive()).toEqual([]);
+    } finally { jest.useRealTimers(); }
+  });
+
+  test('維護旗標要收回來、失敗要寫進畫面讀的那一筆：這台沒有 webhook，畫面是唯一通道', async () => {
+    useFakeTimers();
+    try {
+      await seedFix('merged');
+      await require('../pipeline/maintenance').enterMaintenance(60 * 60 * 1000);
+      await release.restartNow({ userId: 7 });
+
+      failRestart('No such container: odoo-v2');
+      jest.runAllTimers();
+      await release._pendingRestartFailureForTesting();
+
+      expect(await require('../pipeline/maintenance').isMaintenance()).toBe(false);
+      const last = await release.lastReleaseResult();
+      expect(`restarted: ${last.restarted} / 說得出是哪一種失敗: ${/No such container/.test(last.reason || '')}`)
+        .toBe('restarted: false / 說得出是哪一種失敗: true');
+      // 人要知道「碼沒遺失、下一次會再試」，否則看到失敗只會不知道該做什麼
+      expect(last.reason).toMatch(/仍跑著舊碼/);
+      expect(`回滾了幾筆: ${last.restartFailed && last.restartFailed.rolledBack}`).toBe('回滾了幾筆: 1');
+    } finally { jest.useRealTimers(); }
+  });
+
+  test('指令沒出錯就什麼都不動：補救碼自己去回滾成功的那一次，等於把上線的碼再打回待更版', async () => {
+    useFakeTimers();
+    try {
+      const { fixId } = await seedFix('merged');
+      await release.restartNow({ userId: 7 });
+      jest.runAllTimers();   // 預設的 mock 是 cb(null)＝重啟指令送出成功
+      await release._pendingRestartFailureForTesting();
+      expect((await fixRow(fixId)).status).toBe('released');
+    } finally { jest.useRealTimers(); }
+  });
+});
+
 // 這一組釘的是「全部合起來」那道閘門。每條修正都是各自在自己的 worktree 上跑綠才合併的，
 // 這個組合在維護時段之前不存在於任何地方——不在這裡跑，它就直接上線且沒有人在看。
 describe('restartNow 的重啟前全跑閘門', () => {

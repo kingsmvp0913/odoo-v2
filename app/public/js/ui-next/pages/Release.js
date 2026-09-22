@@ -58,6 +58,15 @@
       pending() { return (this.data && this.data.pending) || []; },
       last() { return (this.data && this.data.last) || null; },
       inflight() { return (this.data && this.data.inflight) || []; },
+      // 重啟回來救測試區的結果（release.js 的 recordEnvReviveResult 附掛在同一筆上）。
+      // 沒救回來的那幾台是「開著但什麼都不動」——Odoo 的排程（cron）執行緒在平台重啟時
+      // 從 _bootstrap_inner 逃掉就永久死了，客戶看到的畫面完全正常。這是本子專案要防的那起
+      // 事故本身，所以它必須在畫面上有位置；在這之前它只被寫進 DB，沒有任何一頁讀它。
+      envRevive() { return (this.last && this.last.envRevive) || null; },
+      envReviveFailed() {
+        const e = this.envRevive;
+        return !!e && ((e.failed || 0) + (e.overBudget || 0)) > 0;
+      },
       // 「上一次沒有成功」是這一頁最重要的一件事，判準只看 restarted：
       // testsPassed 是三態而 null 不是通過（release.js 的契約），拿它判會把「跳過全跑但有重啟」
       // 誤報成失敗，也會把「根本沒跑起來」誤報成沒事。
@@ -134,14 +143,14 @@
         }
         parts.push(this.skipTests
           ? '⚠ 你選了跳過重啟前全跑——這一次更版不會留下任何測試證據。'
-          : '重啟前會先對 master 跑一次全套測試，約 15 分鐘；紅了就不重啟，碼留到下一次。');
+          : '重啟前會先對 master 跑一次全套測試，約 2 分鐘；紅了就不重啟，碼留到下一次。');
         if (!await confirmDialog({ title: '立刻更版', message: parts.join('\n'), confirmText: '立刻更版' })) return;
         this.releasing = true;
         try {
           await Api.post('admin/release/now', {
             abortInflight: this.abortInflight, skipTests: this.skipTests,
           });
-          showToast(this.skipTests ? '更版已開始' : '更版已開始，先跑全套測試（約 15 分鐘）', 'success');
+          showToast(this.skipTests ? '更版已開始' : '更版已開始，先跑全套測試（約 2 分鐘）', 'success');
           await this.load(true);
         } catch (e) {
           this.releasing = false;
@@ -225,6 +234,24 @@
               <div v-if="last.aborted && last.aborted.length"
                 style="font-size:var(--fs-sm);color:var(--warning-strong);margin-top:var(--space-2)">
                 那一次中止了 {{ last.aborted.length }} 條在飛任務（#{{ last.aborted.join('、#') }}），它們會在重啟後自動從同一關重跑。
+              </div>
+              <!-- 重啟後重開測試區的結果。目前只有「有沒救到的」才會被寫進來（reviveRunningEnvs
+                   只在 failed／overBudget 時記錄），但兩種情況都畫得出來——哪天改成每次都記，
+                   這裡不必跟著改。 -->
+              <div v-if="envRevive"
+                :style="{ fontSize:'var(--fs-sm)', marginTop:'var(--space-2)',
+                          color: envReviveFailed ? 'var(--danger)' : 'var(--text-muted)' }">
+                <template v-if="envReviveFailed">
+                  ⚠ 重啟後有 {{ (envRevive.failed || 0) + (envRevive.overBudget || 0) }} 個測試區沒有重開成功（那一次共要重開 {{ envRevive.total || 0 }} 個）。
+                  它們現在「開著但什麼都不動」——Odoo 的排程（cron）執行緒在平台重啟時死掉了，只有整個測試區重開才會回來，
+                  而畫面上一切正常，客戶不會來反映。請到各專案的環境頁把下面這幾個手動重啟：
+                  <div v-for="f in (envRevive.failures || [])" :key="f.projectId" style="margin-top:2px">
+                    ・專案 {{ f.projectId }}：{{ f.error }}
+                  </div>
+                </template>
+                <template v-else>
+                  重啟後重開了 {{ envRevive.revived || 0 }} 個測試區（略過 {{ envRevive.skipped || 0 }} 個），排程（cron）執行緒都回來了。
+                </template>
               </div>
               <!-- 「該怎麼辦」跟失敗訊息綁在一起。半夜兩點沒有人在，看到這段的人多半是隔了幾天
                    才來的，光說「失敗了」等於把問題丟回去。 -->
@@ -338,7 +365,7 @@
               </label>
               <label style="display:flex;align-items:center;gap:var(--space-2);font-size:var(--fs-sm);color:var(--text)">
                 <input type="checkbox" v-model="skipTests">
-                跳過重啟前全跑（約省 15 分鐘，<strong style="color:var(--danger)">這一次更版不會留下任何測試證據</strong>）
+                跳過重啟前全跑（只省約 2 分鐘，<strong style="color:var(--danger)">這一次更版不會留下任何測試證據</strong>）
               </label>
             </div>
             <div class="setting-block-footer">

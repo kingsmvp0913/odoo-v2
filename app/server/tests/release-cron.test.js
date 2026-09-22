@@ -63,7 +63,8 @@ const WINDOW = { weekdays: [6, 0], startHour: 2, durationHours: 2 };
 // 寫死 +08:00 的話這支測試在別的時區就會假紅（而它要守的東西與時區無關）。
 const at = (d, h, m) => new Date(2026, 8, d, h, m, 0);
 const SAT_0230 = () => at(26, 2, 30);   // 週六 02:30，時段中段，離結束還有 90 分鐘
-const SAT_0345 = () => at(26, 3, 45);   // 週六 03:45，離結束只剩 15 分鐘
+const SAT_0345 = () => at(26, 3, 45);   // 週六 03:45，離結束剩 15 分鐘——門檻 5 分鐘，所以「還早」
+const SAT_0357 = () => at(26, 3, 57);   // 週六 03:57，離結束只剩 3 分鐘＝快結束了，該中止在飛任務
 const SUN_0230 = () => at(27, 2, 30);   // 隔天週日的同一場
 const FRI_1000 = () => at(25, 10, 0);   // 週五上班時間
 
@@ -245,6 +246,22 @@ describe('releaseTick 的判斷順序', () => {
 });
 
 describe('在飛任務（裁決三：快結束時強制中止）', () => {
+  // 2026-09-22：門檻從 30 分鐘改成 5 分鐘。原本的 30 分鐘是從「全跑約 15 分鐘」這個沒量過的
+  // 數字推出來的，而實測是 115 秒（見 release.js 的 RELEASE_ABORT_BEFORE_END_MS 註解）——
+  // 等於每個週末都在時段還剩半小時時殺掉一批本來會跑完的任務。這兩支釘住新的界線：
+  // 剩 15 分鐘還在「讓它自己跑完」的範圍，剩 3 分鐘才動手。
+  test('門檻要對得上實測的全跑時間：5 分鐘（＝2 分鐘全跑抓兩倍再加收尾）', () => {
+    expect(release.RELEASE_ABORT_BEFORE_END_MS).toBe(5 * 60 * 1000);
+  });
+
+  test('剩 15 分鐘不准殺任務：全跑只要兩分鐘，那些任務本來都跑得完', async () => {
+    await setWindow(WINDOW);
+    await seedPending();
+    mockInflight.mockReturnValue([{ taskId, userId, startedAt: Date.now() }]);
+    const r = await release.releaseTick({ now: SAT_0345() });
+    expect(`${r.reason} / 殺了嗎: ${mockAbort.mock.calls.length}`).toBe('inflight-waiting / 殺了嗎: 0');
+  });
+
   test('離時段結束還早（剩 90 分鐘）：不中止、不重啟，等下一個 tick 讓任務自己跑完', async () => {
     await setWindow(WINDOW);
     await seedPending();
@@ -257,13 +274,13 @@ describe('在飛任務（裁決三：快結束時強制中止）', () => {
     expect(await release.readLastWindow()).toBeNull();
   });
 
-  test('離時段結束只剩 15 分鐘：中止在飛任務後照常重啟', async () => {
+  test('離時段結束只剩 3 分鐘：中止在飛任務後照常重啟', async () => {
     useFakeTimers();
     try {
       await setWindow(WINDOW);
       await seedPending();
       mockInflight.mockReturnValue([{ taskId, userId, startedAt: Date.now() }]);
-      const r = await release.releaseTick({ now: SAT_0345() });
+      const r = await release.releaseTick({ now: SAT_0357() });
       expect(`aborted: ${r.aborted} / restarted: ${r.restarted}`).toBe(`aborted: ${taskId} / restarted: true`);
       expect(mockAbort).toHaveBeenCalledWith(taskId);
       jest.runAllTimers();
@@ -277,7 +294,7 @@ describe('在飛任務（裁決三：快結束時強制中止）', () => {
       await setWindow(WINDOW);
       await seedPending();
       mockInflight.mockReturnValue([{ taskId, userId, startedAt: Date.now() }]);
-      await release.releaseTick({ now: SAT_0345() });
+      await release.releaseTick({ now: SAT_0357() });
       const { rows } = await dbModule.query('SELECT role, content FROM task_logs WHERE task_id=$1', [taskId]);
       expect(rows.length).toBe(1);
       expect(`${rows[0].role} / 自動重跑=${/自動從同一關重跑/.test(rows[0].content)}`)
@@ -293,7 +310,7 @@ describe('在飛任務（裁決三：快結束時強制中止）', () => {
       let maintainingWhenAborted = null;
       mockInflight.mockReturnValue([{ taskId, userId, startedAt: Date.now() }]);
       mockAbort.mockImplementation(async () => { maintainingWhenAborted = await isMaintaining(); });
-      await release.releaseTick({ now: SAT_0345() });
+      await release.releaseTick({ now: SAT_0357() });
       expect(maintainingWhenAborted).toBe(true);
     } finally { jest.useRealTimers(); }
   });
@@ -355,6 +372,83 @@ describe('全跑紅燈（裁決二：只在畫面上通知，所以記錄就是�
   });
 });
 
+describe('工作區塊自己炸掉（沒有 catch 時，這三件壞事會同時成立）', () => {
+  // 這一段原本是 try/finally 沒有 catch：任何一句拋出去都只會被 cron.js 的 fire-and-forget
+  // `.catch(console.error)` 接住，留下「維護旗標掛著一小時（全平台派工停擺）＋ 沒有任何
+  // release_last_result（畫面顯示的是上一次，多半是綠的）＋ 這一場已經標記跑過（不會再試）」。
+  // 三件加起來，畫面上看起來就是「什麼都沒發生」——本子專案最不能出的那種錯。
+  const WINDOW_KEY = () => new Date(2026, 8, 26, 2, 0, 0).toISOString();
+
+  test('中止在飛任務時拋錯：維護旗標一定收回來，否則全平台派工停到到期時間', async () => {
+    await setWindow(WINDOW);
+    await seedPending();
+    mockInflight.mockReturnValue([{ taskId, userId, startedAt: Date.now() }]);
+    mockAbort.mockImplementation(() => { throw new Error('runner 掛了'); });
+    const r = await release.releaseTick({ now: SAT_0357() });
+    expect(`${r.reason} / 維護中: ${await isMaintaining()}`).toBe('crashed / 維護中: false');
+    expect(mockExecFile).not.toHaveBeenCalled();
+  });
+
+  test('炸掉要留下畫面看得到的紀錄：不寫 DB 就只剩一行會被輪替掉的 stderr（裁決二）', async () => {
+    await setWindow(WINDOW);
+    await seedPending();
+    mockInflight.mockReturnValue([{ taskId, userId, startedAt: Date.now() }]);
+    mockAbort.mockImplementation(() => { throw new Error('runner 掛了'); });
+    await release.releaseTick({ now: SAT_0357() });
+    const last = await release.lastReleaseResult();
+    expect(`restarted: ${last.restarted} / 說得出真因: ${/runner 掛了/.test(last.reason || '')}`)
+      .toBe('restarted: false / 說得出真因: true');
+    expect(last.windowStart).toBe(WINDOW_KEY());
+  });
+
+  test('全跑那一段拋例外（不是紅燈，是根本跑不起來）也走同一條路：不會靜默吃掉這一場', async () => {
+    mockMeasure.mockRejectedValue(new Error('spawn ENOMEM'));
+    await setWindow(WINDOW);
+    await seedPending();
+    const r = await release.releaseTick({ now: SAT_0230() });
+    expect(`${r.reason} / 維護中: ${await isMaintaining()}`).toBe('crashed / 維護中: false');
+    const last = await release.lastReleaseResult();
+    expect(/spawn ENOMEM/.test(last.reason || '')).toBe(true);
+  });
+
+  // 【裁決】崩潰的這一場可以再試，但有上限。紅燈刻意不重試（判決不會在兩小時內改變），
+  // 崩潰不同：多半是暫時性的（DB 斷一下、docker 查詢逾時），下一分鐘很可能就成功，
+  // 不試就白丟一整個週末的時段。上限則是防「bug 每分鐘重跑一次全跑燒到天亮」。
+  test('崩潰的這一場會再試：旗標收回來，下一個 tick 才有機會補上（不收＝這一場被靜默放棄）', async () => {
+    await setWindow(WINDOW);
+    await seedPending();
+    mockMeasure.mockRejectedValue(new Error('spawn ENOMEM'));
+    const r = await release.releaseTick({ now: SAT_0230() });
+    expect(`retryable: ${r.retryable} / 旗標: ${await release.readLastWindow()}`)
+      .toBe('retryable: true / 旗標: null');
+    // 下一分鐘這次好了：同一場照樣上得去
+    mockMeasure.mockResolvedValue(GREEN);
+    useFakeTimers();
+    try {
+      const again = await release.releaseTick({ now: at(26, 2, 31) });
+      expect(`ran: ${again.ran} / restarted: ${again.restarted}`).toBe('ran: true / restarted: true');
+      jest.runAllTimers();   // 把延遲的重啟指令跑掉，別讓它變成掛在假時鐘上的待決計時器
+    } finally { jest.useRealTimers(); }
+  });
+
+  test('連續崩潰有上限：到頂就把旗標留著結束這一場，不讓 bug 每分鐘再跑一次全跑', async () => {
+    await setWindow(WINDOW);
+    await seedPending();
+    mockMeasure.mockRejectedValue(new Error('spawn ENOMEM'));
+    const tries = [];
+    for (let i = 0; i <= release.RELEASE_MAX_CRASH_RETRIES; i++) {
+      tries.push((await release.releaseTick({ now: at(26, 2, 30 + i) })).retryable);
+    }
+    // 前 RELEASE_MAX_CRASH_RETRIES 次允許再試，最後一次放棄
+    expect(tries).toEqual([...Array(release.RELEASE_MAX_CRASH_RETRIES).fill(true), false]);
+    expect(await release.readLastWindow()).toBe(WINDOW_KEY());
+    const after = await release.releaseTick({ now: at(26, 3, 0) });
+    expect(after.reason).toBe('already-ran');
+    // 放棄的理由也要寫給人看，否則畫面上只看得到「沒重啟」而不知道它其實試過三次
+    expect((await release.lastReleaseResult()).reason).toMatch(/不再重試/);
+  });
+});
+
 describe('排程頁看得到下一次維護時段（裁決二在畫面上的落點）', () => {
   let cronModule;
   beforeAll(() => { cronModule = require('../cron'); });
@@ -392,14 +486,14 @@ describe('排程頁看得到下一次維護時段（裁決二在畫面上的落�
     await setWindow(WINDOW);
     await seedPending();
     mockInflight.mockReturnValue([{ taskId, userId, startedAt: Date.now() }]);
-    cronModule._setClockForTesting(() => SAT_0345());
+    cronModule._setClockForTesting(() => SAT_0357());
     cronModule.startCron();
     const tick = nodeCron.schedule.mock.calls.at(-1)[1];
     try {
       await tick();
       await cronModule._pendingReleaseTickForTesting();
       expect(await release.readLastWindow()).toBe(new Date(2026, 8, 26, 2, 0, 0).toISOString());
-      expect(mockAbort).toHaveBeenCalledWith(taskId);   // 03:45＝快結束，所以在飛的那張被中止
+      expect(mockAbort).toHaveBeenCalledWith(taskId);   // 03:57＝快結束，所以在飛的那張被中止
     } finally {
       cronModule.stopCron();
       cronModule._setClockForTesting(null);

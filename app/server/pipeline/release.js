@@ -68,8 +68,12 @@ async function runReleaseTests() {
  */
 async function pendingReleases() {
   const { rows } = await query(
+    // finding_status／finding_applied_at 是**回滾要用的原值**（見 handleRestartFailure）：
+    // 重啟指令失敗時要把這一批放回待更版，寫死 'approved'／NULL 會把別的路徑（人工裁決、
+    // 上一次更版）留下的狀態一起覆蓋掉，所以在動手之前就先把原值抓在手上。
     `SELECT f.id, f.finding_id, f.branch, f.commit_sha, f.status, f.created_at,
-            h.diagnosis, h.severity
+            h.diagnosis, h.severity,
+            h.status AS finding_status, h.applied_at AS finding_applied_at
        FROM finding_fixes f
        LEFT JOIN health_check_findings h ON h.id = f.finding_id
       WHERE f.status = 'merged'
@@ -210,10 +214,74 @@ async function reviveRunningEnvs(deps = {}) {
   return stats;
 }
 
+/* ────────────────────────────────────────────────────────────────────────────
+ * 重啟指令失敗時的補救
+ *
+ * 「先標記已更版、再下重啟指令」的順序**不能倒過來**：那道指令會把這個行程一起帶走，
+ * 排在後面的寫入不保證跑得到。所以能修的不是順序，是**失敗之後還剩下什麼**。
+ *
+ * docker restart 失敗（socket 被收回、daemon 忙、容器名對不上）時這個行程其實還活著，
+ * callback 有幾秒鐘可用，剛好夠做四件事——每一件各自對應一種原本會永遠靜默的後果：
+ *   1. 把這一批標記回滾成待更版。不回滾的話待更版清單**永遠是空的**：更版頁顯示全綠、
+ *      下一個時段的第 4 步判「nothing-pending」直接結束，平台就這樣無限期跑著舊碼。
+ *   2. 清掉 release_envs_to_revive。那份清單是為「這一次重啟」記的；沒重啟卻留著，
+ *      將來某次不相干的開機會照著它把一批測試區重開一輪（重開的是別人正在用的環境）。
+ *   3. 收掉維護旗標。restartNow 回 restarted 時呼叫端刻意不清旗標（正常情況下行程已經死了、
+ *      由 index.js 開機時清）；沒死就必須自己清，否則派工一路停到到期時間。
+ *   4. 把失敗寫進 release_last_result。這台沒有 webhook 也沒有 Teams（裁決二），
+ *      畫面是唯一通道，不寫下來就只剩一行會被輪替掉的 stderr。
+ *
+ * ⚠ 救不回來的：callback 根本沒被呼叫的那種——指令送出去、容器真的被收掉（那就是成功），
+ * 或行程在 callback 之前先死了。那時什麼都不會回滾，而它與成功長得一模一樣；分辨得出來的
+ * 只有人：平台起不來，或起來了卻還是舊碼。同理，回滾跑到一半行程才死掉的話，DB 會停在
+ * 「一半 released 一半 merged」——下一個時段只會上剩下那半批，不會更糟，但也不會自己補齊。
+ * ──────────────────────────────────────────────────────────────────────────── */
+
+// 供測試等待這段補救跑完：callback 是 execFile 丟回來的，測試沒有別的把手接得到它。
+let _restartFailurePromise = null;
+
+async function handleRestartFailure(err, { container, releases }) {
+  const reason = `已標記 ${releases.length} 筆為已更版，但 docker restart ${container} 失敗：${err.message}`
+    + '。平台仍跑著舊碼；那一批已經放回待更版，下一個維護時段或人工按「立刻更版」會再試一次。'
+    + '請先確認容器還在、docker socket 還連得上，必要時在 host 上人工 docker restart。';
+  console.error('[RELEASE] %s', reason);
+
+  for (const r of releases) {
+    await query("UPDATE finding_fixes SET status='merged' WHERE id=$1 AND status='released'", [r.id])
+      .catch(e => console.error('[RELEASE] 回滾待更版狀態失敗（fix %s）：%s', r.id, e.message));
+    // 用進來時抓到的原值還原，不寫死常數（見 pendingReleases 的註解）。
+    await query(
+      'UPDATE health_check_findings SET status=$2, applied_at=$3 WHERE id=$1 AND status=\'done\'',
+      [r.finding_id, r.finding_status || 'approved', r.finding_applied_at || null])
+      .catch(e => console.error('[RELEASE] 回滾提案處置狀態失敗（finding %s）：%s', r.finding_id, e.message));
+  }
+  await clearEnvsToRevive()
+    .catch(e => console.error('[RELEASE] 清待重開測試區清單失敗：', e.message));
+  await leaveMaintenance()
+    .catch(e => console.error('[RELEASE] 清維護旗標失敗：', e.message));
+
+  // 合併進上一筆而不是另寫一筆：呼叫端（releaseTick／立刻更版）在這之前已經寫過一筆
+  // restarted:true 的樂觀紀錄，畫面讀的就是那一筆，要把它改口才看得到失敗。
+  const prev = await lastReleaseResult().catch(() => null);
+  const record = {
+    ...(prev || { at: new Date().toISOString() }),
+    restarted: false,
+    released: 0,
+    reason,
+    restartFailed: { container, at: new Date().toISOString(), error: err.message, rolledBack: releases.length },
+  };
+  await query(
+    `INSERT INTO teams_settings (id, release_last_result) VALUES (1, $1)
+       ON CONFLICT (id) DO UPDATE SET release_last_result = $1`, [JSON.stringify(record)])
+    .catch(e => console.error('[RELEASE] 記錄重啟失敗結果失敗：', e.message));
+  return record;
+}
+
 /**
  * 真的重啟平台，讓已經合併的碼生效。
  *
- * 回傳 `{ restarted, testsPassed, tests, reason }`；不重啟時 `reason` 一定說得出是為什麼——
+ * 回傳 `{ restarted, testsPassed, tests, reason }`；`restarted: true` ＝**重啟指令已送出**
+ * （見函式尾端），不等於重啟成功；不重啟時 `reason` 一定說得出是為什麼——
  * 這條路的每一種「沒做」都是靜默的（人只會看到平台還跑著舊碼），沒有理由就等於查不出來。
  *
  * ⚠ `testsPassed` 是三態，**null 不是通過**——呼叫端要判就判 `=== false`，不要判 falsy：
@@ -244,7 +312,7 @@ async function restartNow(opts = {}) {
 
   // 閘門夾在「查完容器名」與「開始標記」之間。
   // 排在標記之前：標記一旦寫下去，更版頁就再也看不到這一批，而紅燈的正解是原封不動留到下個時段。
-  // 排在查容器之後：查不到容器名根本重啟不了，不值得先燒掉十幾分鐘跑全跑。
+  // 排在查容器之後：查不到容器名根本重啟不了，不值得先燒掉兩分鐘跑全跑。
   let tests = null;
   if (opts.skipTests) {
     // 只有人工在畫面上明確指定跳過才會到這裡（例如已經自己跑過、或急著讓某條修正生效）。
@@ -292,10 +360,21 @@ async function restartNow(opts = {}) {
   console.log('[RELEASE] 重啟平台容器 %s 讓 %d 筆已合併的修正生效（重啟後要重開 %d 個測試區）',
     container, releases.length, envsToRevive.length);
   setTimeout(() => {
-    execFile('docker', ['restart', container], err => {
-      if (err) console.error('[RELEASE] restart:', err.message);
+    _restartFailurePromise = new Promise(resolve => {
+      execFile('docker', ['restart', container], err => {
+        // 沒錯就什麼都不做：這個行程正要被指令帶走，做什麼都不保證跑得完。
+        if (!err) return resolve(null);
+        // 有錯代表行程還活著、而 DB 裡已經寫著「這一批上線了」——那是最危險的一種狀態
+        // （待更版清單空掉＝這批碼再也不會被上線）。補救見 handleRestartFailure。
+        handleRestartFailure(err, { container, releases })
+          .catch(e => console.error('[RELEASE] 重啟失敗的補救本身也失敗了：', e.message))
+          .then(resolve);
+      });
     });
   }, RESTART_DELAY_MS);
+  // ⚠ `restarted: true` 的意思是「**重啟指令已經送出去**」，不是「重啟成功了」——成功的長相
+  // 是這個行程當場消失，沒有任何人回得來把 true 改成別的值。指令真的失敗時由上面的 callback
+  // 把 release_last_result 改口成 restarted:false 並回滾標記，畫面讀的是那一筆。
   return { restarted: true, testsPassed: opts.skipTests ? null : true, tests,
     reason: null, container, released: releases.length, envsToRevive: envsToRevive.length };
 }
@@ -320,19 +399,28 @@ const DEFAULT_RELEASE_WINDOW = { weekdays: [6, 0], startHour: 2, durationHours: 
 
 // 「快結束了」的門檻：離時段結束剩這麼多就不再等在飛任務，直接中止並照常重啟。
 //
-// 為什麼是 30 分鐘（時段全長 120 分鐘）：
-//   - restartNow 會**先**跑一次全套測試才重啟，實測約 15 分鐘（Task 3 實量）。那 15 分鐘是
-//     這台機器平常的值、不是上限——維護時段剛好接在夜間批次（22:00 起、02:00 收）的尾巴，
-//     機器可能還在忙，所以要抓兩倍：30 分鐘 = 15 分鐘全跑 ＋ 15 分鐘給中止收尾與重啟指令。
-//   - 不能更大：設 45～60 分鐘等於在時段前半就開始殺任務，而那時還有兩三個 tick 的機會讓
-//     它們自己跑完——**任務自己跑完永遠是最好的結果**，中止只是為了不讓一條任務綁架整個時段。
-//     30 分鐘的門檻給了在飛任務 90 分鐘（02:00–03:30）自己收尾。
-//   - 不能更小：設 15 分鐘的話全跑就把剩下的時間吃光，稍有變異就變成「任務殺了、時段也錯過」
-//     ——兩頭皆空，比不中止還糟。
-const RELEASE_ABORT_BEFORE_END_MS = parseInt(process.env.RELEASE_ABORT_BEFORE_END_MS || '1800000', 10);
+// 為什麼是 5 分鐘（時段全長 120 分鐘）——**從實測值推導，不是估的**：
+//   - 全跑實測 115 秒（2026-09-22 在這台機器上量：主 clone 的 `cd app && npm run test:quiet`，
+//     6,069 支測試／396 個測試檔，exit code 0，jest 自報 114.7 秒、wall 115 秒）。
+//     ⚠ 這個數字會腐爛（測試只會越加越多），下次有人覺得門檻不夠用時請重量一次再改，
+//     不要憑印象加碼——本行原本寫的「約 15 分鐘」就是沒量過的估計，差了快 8 倍。
+//   - 推導：2 分鐘 × 2（維護時段接在夜間批次 22:00–02:00 的尾巴，機器可能還在忙）＝ 4 分鐘，
+//     再加 1 分鐘給中止收尾與 docker restart 的緩衝 → 5 分鐘。
+//   - 不能更大：門檻每多一分鐘，就是每個週末多殺掉一分鐘份量的、本來自己會跑完的任務。
+//     **任務自己跑完永遠是最好的結果**，中止只是為了不讓一條任務綁架整個時段；原本的 30 分鐘
+//     等於在 03:30 就開始殺，而那時全跑只需要兩分鐘。
+//   - 壓這麼緊的代價很小：沒有任何地方在時段邊界上硬停進行中的更版（判斷只發生在進場那一刻），
+//     所以真的超時也只是重啟發生在 04:0x，不是「任務殺了、時段也錯過」。
+const RELEASE_ABORT_BEFORE_END_MS = parseInt(process.env.RELEASE_ABORT_BEFORE_END_MS || '300000', 10);
+
+// 崩潰重試上限：同一場時段裡，工作區塊自己炸掉最多讓它再試這麼多次（見 handleTickCrash）。
+const RELEASE_MAX_CRASH_RETRIES = parseInt(process.env.RELEASE_MAX_CRASH_RETRIES || '2', 10);
 
 // 更版期間的維護旗標長度。要能撐過「全跑＋重啟＋開機」而不中途過期——中途過期會讓派工在
-// 我們正要下重啟指令的那一刻恢復，剛派出去的 agent 立刻被砍。取全跑實測值的四倍。
+// 我們正要下重啟指令的那一刻恢復，剛派出去的 agent 立刻被砍。實際需要的是
+// 全跑 2 分 ＋ 重啟 ＋ 開機（含測試區重開預算 ENV_REVIVE_BUDGET_MS 3 分）≈ 10 分鐘以內；
+// 這裡仍留 1 小時不跟著調小，因為它是**上限型的保險**：長一點只是延後「無人收拾時自動恢復」，
+// 而正常路徑（重啟成功→開機清、沒重啟→leaveMaintenance、崩潰→handleTickCrash）都會明確清掉它。
 // ⚠ 這是到期時間不是布林（maintenance.js 檔頭三道保險）：這條路徑掛掉也不會讓派工永久停擺。
 const RELEASE_MAINTENANCE_MS = parseInt(process.env.RELEASE_MAINTENANCE_MS || '3600000', 10);
 
@@ -390,6 +478,17 @@ async function markWindow(windowKey) {
 }
 
 /**
+ * 把「這一場跑過了」的旗標收回來，讓同一場時段還能再試一次。
+ * **只有在整條路徑確定沒有下過重啟指令時才准呼叫**（見 handleTickCrash）：指令一旦送出去，
+ * 旗標就是防止「重啟回來又重啟一次」的唯一一道保險，收掉它等於回到無限重啟。
+ */
+async function clearWindowMark() {
+  await query(
+    `INSERT INTO teams_settings (id, release_last_window) VALUES (1, NULL)
+       ON CONFLICT (id) DO UPDATE SET release_last_window = NULL`);
+}
+
+/**
  * 上一次更版嘗試的結果。**這是裁決二唯一的落點**：紅燈只在畫面上通知，這台沒有 webhook
  * 也沒有 Teams，所以「半夜兩點全跑紅了」這件事若不寫進 DB，就只剩一行會被輪替掉的 stdout。
  * 排程頁與更版頁都讀這一筆，讓它在事後找得到，而不是只發生過。
@@ -443,6 +542,64 @@ async function abortInflightForRelease(inflight, msLeft) {
 }
 
 /**
+ * 更版工作區塊自己炸掉時的收尾。
+ *
+ * 這一段原本沒有 catch，而它涵蓋的每一句都可能拋：pendingReleases 的 SQL、標記迴圈的兩道
+ * UPDATE、中止路徑、restartNow 裡的每一次查詢。拋出去只會被 cron.js 的 fire-and-forget
+ * `.catch(console.error)` 接住，留下的是三件同時成立的壞事：
+ *   - 維護旗標還掛著 → 全平台派工停一小時；
+ *   - 沒有任何 release_last_result → 更版頁顯示的是上一次（多半是綠的）；
+ *   - 這一場的旗標已經落了 → 不會再試，而且沒有人知道它試過。
+ * 三件加起來就是「安靜地什麼都沒發生」，正是這個子專案存在的理由。
+ *
+ * 【這一場還能不能再試】可以，但有上限，而且**只在沒下過重啟指令時**：
+ *   - 該給重試：崩潰與「全跑紅燈」在性質上完全不同。紅燈是對碼的判決，兩小時內不會自己變綠，
+ *     所以刻意不重試；而崩潰多半是暫時性的（DB 連線斷一下、docker 查詢逾時），下一分鐘再試
+ *     很可能就成功，不試就白白丟掉一整個週末的時段。
+ *   - 該有上限：崩潰若是程式碼的 bug，每分鐘重試一次＝每分鐘再跑一次全跑，把機器燒到天亮，
+ *     而結果不會變。上限 RELEASE_MAX_CRASH_RETRIES 次之後就把旗標留著，讓這一場結束，
+ *     人在畫面上看得到它為什麼放棄。
+ *   - 下過重啟指令就絕不重試：那時行程隨時會消失，旗標是防止「重啟回來又重啟一次」的
+ *     唯一保險（readLastWindow 檔頭記著那個無限重啟的坑）。
+ */
+async function handleTickCrash(err, { windowKey, pending, restartFired }) {
+  console.error('[RELEASE] 維護時段的更版流程中途出錯（%s）：%s', windowKey, err.stack || err.message);
+  // 先收維護旗標：三件壞事裡就它會把整個平台的派工停掉，而且與能不能重試無關。
+  if (!restartFired) {
+    await leaveMaintenance().catch(e => console.error('[RELEASE] 清維護旗標失敗：', e.message));
+  }
+
+  const prev = await lastReleaseResult().catch(() => null);
+  const crashCount = (prev && prev.crash && prev.crash.windowStart === windowKey)
+    ? (prev.crash.count || 1) + 1 : 1;
+  const retryable = !restartFired && crashCount <= RELEASE_MAX_CRASH_RETRIES;
+  const reason = `更版流程中途出錯：${err.message}`
+    + `｜${restartFired ? '重啟指令已經送出，不重試（避免重啟回來又重啟一次）'
+      : retryable ? `這一場還會再試（第 ${crashCount} 次，上限 ${RELEASE_MAX_CRASH_RETRIES} 次）`
+      : `這一場已經試過 ${crashCount} 次，不再重試——碼留在待更版等下一個時段`}`
+    + '。碼已在 master 但沒有生效，平台仍跑舊碼；請看平台 log 的 [RELEASE] 那幾行找真因。';
+  await recordReleaseResult({
+    windowStart: windowKey,
+    at: new Date().toISOString(),
+    restarted: false,
+    testsPassed: null,
+    reason,
+    released: 0,
+    pending,
+    aborted: [],
+    envsToRevive: 0,
+    summary: null,
+    crash: { windowStart: windowKey, count: crashCount, error: err.message, retryable },
+  }).catch(e => console.error('[RELEASE] 記錄更版崩潰結果失敗：', e.message));
+
+  // 旗標最後才收：前面兩件事失敗時寧可這一場不再試，也不要在沒有任何紀錄的情況下重跑。
+  if (retryable) {
+    await clearWindowMark().catch(e => console.error('[RELEASE] 收回時段旗標失敗，這一場不會再試：', e.message));
+  }
+  return { ran: false, reason: 'crashed', windowKey, error: err.message, retryable, crashCount };
+}
+
+/**
  * 維護時段的一拍。cron 每分鐘打一次，回傳 `{ ran, reason, ... }`——**每一種「沒做」都說得出理由**，
  * 因為這條路徑的所有失敗都是靜默的（人只會看到平台還跑著舊碼）。
  *
@@ -491,11 +648,14 @@ async function releaseTick(deps = {}) {
   }
 
   _releaseRunning = true;
+  // 有沒有下過重啟指令，決定崩潰時能不能把這一場的旗標收回來重試（見 handleTickCrash）。
+  let restartFired = false;
   try {
     // ⚠ 旗標一定要先落。下面每一件事都可能把這個行程帶走（重啟指令、容器被收），
     // 而「跑過了」若只記在記憶體，回來就歸零，同一場時段會被無限重啟。
-    // 代價是「這一場只嘗試一次」：全跑紅了不會在同一場重試。那是刻意的——一次全跑十幾分鐘，
-    // 每分鐘重試一次只會把機器跑垮，而紅燈不會在兩小時內自己變綠。
+    // 代價是「這一場只嘗試一次」：全跑紅了不會在同一場重試。那是刻意的——紅燈不會在兩小時內
+    // 自己變綠，每分鐘重跑一次全跑（實測 115 秒，見 RELEASE_ABORT_BEFORE_END_MS）只是白燒機器。
+    // 崩潰是另一回事，那條路有次數上限的重試（見 handleTickCrash）。
     await markWindow(windowKey);
     // 先停派工、再中止在飛任務。反過來的話被中止的任務會在 60 秒後的下一個 tick 立刻被重派，
     // 跑到一半又被重啟砍掉——白燒一輪，而且中止訊息會被後來那一輪的內容蓋過去。
@@ -506,6 +666,7 @@ async function releaseTick(deps = {}) {
     // 走到這裡裁決已經下了：中止並照常重啟，所以傳空陣列。不傳空的話這一場會被剛中止、
     // 還沒從 _inFlight 移除的那幾條擋掉，等於裁決三沒有實作。
     const result = await restartNow({ userId: deps.userId ?? null, inflight: [] });
+    restartFired = result.restarted === true;
 
     const record = {
       windowStart: windowKey,
@@ -529,6 +690,10 @@ async function releaseTick(deps = {}) {
       await leaveMaintenance().catch(err => console.error('[RELEASE] 清維護旗標失敗：', err.message));
     }
     return { ran: true, windowKey, aborted, pending: pending.length, ...result };
+  } catch (err) {
+    // ⚠ 這個 catch 是整段的救命索：沒有它，任何一句拋出去都會留下「維護旗標掛著、
+    // 沒有任何紀錄、而且這一場已經標記跑過」——畫面上看起來什麼都沒發生。
+    return await handleTickCrash(err, { windowKey, pending: pending.length, restartFired });
   } finally {
     _releaseRunning = false;
   }
@@ -538,5 +703,7 @@ module.exports = {
   pendingReleases, restartNow,
   captureRunningEnvs, readEnvsToRevive, reviveRunningEnvs,
   releaseTick, releaseWindowConfig, lastReleaseResult, readLastWindow,
-  DEFAULT_RELEASE_WINDOW, RELEASE_ABORT_BEFORE_END_MS,
+  DEFAULT_RELEASE_WINDOW, RELEASE_ABORT_BEFORE_END_MS, RELEASE_MAX_CRASH_RETRIES,
+  // 重啟指令是 setTimeout ＋ execFile callback，測試沒有別的把手等得到那段補救跑完。
+  _pendingRestartFailureForTesting: () => _restartFailurePromise,
 };

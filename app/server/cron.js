@@ -457,8 +457,8 @@ function startCron() {
 
       // 平台更版的維護時段（規格 §4.3）。判斷順序全在 release.js 的 releaseTick 裡，這裡只負責
       // 「每分鐘打一通」——時段、已跑過、有沒有待更版、在飛任務怎麼辦，都是那支的責任。
-      // ⚠ 刻意不 await：restartNow 會先跑一次全套測試（實測約 15 分鐘），await 它等於讓整個
-      // 排程停擺十幾分鐘；更糟的是全跑若卡住，cron 會跟著永久死掉。比照夜間批次的既有作法
+      // ⚠ 刻意不 await：restartNow 會先跑一次全套測試（2026-09-22 實測 115 秒），await 它等於
+      // 讓整個排程停擺那麼久；更糟的是全跑若卡住，cron 會跟著永久死掉。比照夜間批次的既有作法
       // （runNightlyFix 也是 fire-and-forget），重入由 releaseTick 自己的 DB 旗標＋行程內鎖擋。
       try {
         const { releaseTick } = require('./pipeline/release');
