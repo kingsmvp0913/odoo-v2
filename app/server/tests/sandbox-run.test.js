@@ -17,6 +17,9 @@ function deps(over = {}) {
     d: {
       ensureAgentInfra: async () => ({ instanceId: 'odoo-v2', image: 'aidev-agent:2.1.266', network: 'odoo-v2-agent-net', gatewayHost: 'odoo-v2-gw' }),
       getClaudeAuthEnv: () => ({ CLAUDE_CODE_OAUTH_TOKEN: 'oauth-x' }),
+      // 階段 3 起憑證由 buildClaudeAuthEnv(userId) 決定（客戶公司用自己的 ANTHROPIC_API_KEY，
+      // 其餘用平台訂閱）。這裡的替身回平台那把，與改動前的行為相同。
+      buildClaudeAuthEnv: async () => ({ CLAUDE_CODE_OAUTH_TOKEN: 'oauth-x' }),
       getSandboxLimits: () => ({ memory: '4g', cpus: '2', pids: 512 }),
       resolveSandboxMounts: async (ctx) => ({ mounts: [], workdir: ctx.platformWorktree || ctx.home }),
       mkdirSync: () => {},
@@ -75,10 +78,26 @@ describe('prepareSandboxRun', () => {
     expect(calls.kill).toContainEqual(['docker', 'kill', run.containerName]);
   });
 
-  test('沒有 Claude token → 丟例外，不簽發通行證', async () => {
-    const { d } = deps({ getClaudeAuthEnv: () => ({}) });
-    await expect(sr.prepareSandboxRun({ claudeArgs: ARGS, opts: { agentType: 'qa' }, profile: profileFor('qa'), projectId: 7 }, d)).rejects.toThrow(/token/);
+  // 意圖不變：一把憑證都沒有就不准跑，而且不簽發通行證。階段 3 之後「一把都沒有」的判定
+  // 從「沒有 OAuth token」變成「OAuth token 與 API key 都沒有」——斷言跟著改到新的機制上，
+  // 但要守的東西一字未改。
+  test('一把 Anthropic 憑證都沒有 → 丟例外，不簽發通行證', async () => {
+    const { d } = deps({ buildClaudeAuthEnv: async () => ({}) });
+    await expect(sr.prepareSandboxRun({ claudeArgs: ARGS, opts: { agentType: 'qa' }, profile: profileFor('qa'), projectId: 7 }, d)).rejects.toThrow(/憑證/);
     expect(rt.activeRunCount()).toBe(0);
+  });
+
+  // 客戶公司：解析回 API key 就該照跑，不可以因為「沒有 OAuth token」被擋下——
+  // 那正是接線前的硬擋，也是這一塊要拆掉的東西。
+  test('客戶公司只有 API key → 照跑，且容器 env 裡沒有平台那把', async () => {
+    const { d } = deps({ buildClaudeAuthEnv: async () => ({ ANTHROPIC_API_KEY: 'sk-cust' }) });
+    const run = await sr.prepareSandboxRun({ claudeArgs: ARGS, opts: { agentType: 'qa' }, profile: profileFor('qa'), projectId: 7 }, d);
+    const envArgs = run.argv.join(' ');
+    // 憑證走 SECRET_ENV_KEYS：argv 只出現鍵名、值由 childEnv 傳，否則 ps 看得到客戶的 key。
+    expect(`argv 只帶鍵名: ${envArgs.includes('-e ANTHROPIC_API_KEY') && !envArgs.includes('sk-cust')}`).toBe('argv 只帶鍵名: true');
+    expect(`值走 childEnv: ${run.childEnv.ANTHROPIC_API_KEY}`).toBe('值走 childEnv: sk-cust');
+    expect(`夾帶平台那把: ${'CLAUDE_CODE_OAUTH_TOKEN' in run.childEnv}`).toBe('夾帶平台那把: false');
+    await run.release();
   });
 
   test('呼叫端 env 帶白名單外的 key（例如整包 gitEnv）→ 丟例外並作廢通行證', async () => {

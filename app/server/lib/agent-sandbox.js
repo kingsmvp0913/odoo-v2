@@ -9,7 +9,11 @@
 const path = require('path');
 
 const FORBIDDEN_ENV = ['APP_SECRET', 'JWT_SECRET', 'DATABASE_URL'];
-const SECRET_ENV_KEYS = ['CLAUDE_CODE_OAUTH_TOKEN', 'AIDEV_AI_TOKEN', 'E2E_PASSWORD'];
+// ⚠ 進這份清單的值走 `-e KEY`（值由 childEnv 傳），不在的走 `-e KEY=值`——後者會出現在
+// docker run 的參數裡，`ps` 就看得到。憑證一律放這裡。
+// ANTHROPIC_API_KEY：階段 3 客戶自帶 key（pipeline/sandbox-run.js 的 buildClaudeAuthEnv）。
+// 只加進 ENV_WHITELIST 而漏掉這裡的話，測試照樣綠、容器照樣跑，但客戶的 key 會印在行程列表上。
+const SECRET_ENV_KEYS = ['CLAUDE_CODE_OAUTH_TOKEN', 'ANTHROPIC_API_KEY', 'AIDEV_AI_TOKEN', 'E2E_PASSWORD'];
 const ENV_WHITELIST = [
   ...SECRET_ENV_KEYS,
   'AIDEV_AI_BASE', 'HTTPS_PROXY', 'https_proxy', 'NO_PROXY', 'no_proxy',

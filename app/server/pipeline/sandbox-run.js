@@ -107,6 +107,7 @@ async function prepareSandboxRun({ claudeArgs, opts = {}, profile, projectId }, 
   const d = {
     ensureAgentInfra: (...a) => require('../lib/agent-infra').ensureAgentInfra(...a),
     getClaudeAuthEnv: (...a) => require('../lib/claude-auth').getClaudeAuthEnv(...a),
+    buildClaudeAuthEnv: (...a) => require('../lib/claude-auth').buildClaudeAuthEnv(...a),
     getSandboxLimits: (...a) => require('../lib/agent-sandbox-flag').getSandboxLimits(...a),
     resolveSandboxMounts: (...a) => require('../lib/agent-mounts').resolveSandboxMounts(...a),
     importTaskObjects: (...a) => require('../lib/agent-objects').importTaskObjects(...a),
@@ -125,10 +126,24 @@ async function prepareSandboxRun({ claudeArgs, opts = {}, profile, projectId }, 
 
   const infra = await d.ensureAgentInfra();
   const callerEnv = opts.env || {};
-  const auth = { ...d.getClaudeAuthEnv() };
-  if (callerEnv.CLAUDE_CODE_OAUTH_TOKEN) auth.CLAUDE_CODE_OAUTH_TOKEN = callerEnv.CLAUDE_CODE_OAUTH_TOKEN;
-  if (!auth.CLAUDE_CODE_OAUTH_TOKEN) {
-    throw new Error('容器模式需要管理員在設定頁存入 Claude token（CLAUDE_CODE_OAUTH_TOKEN）；不退回平台主機的憑證檔');
+  // 階段 3：這一次的錢算誰的由 buildClaudeAuthEnv 決定——客戶公司用自己的 ANTHROPIC_API_KEY，
+  // 內部／平台管理員／系統觸發用平台訂閱的 CLAUDE_CODE_OAUTH_TOKEN。它只會回**一把**。
+  // 非同步只發生在這裡：claude-auth.js 檔頭寫明讀取端必須同步（runClaude 若改成 await 查 DB，
+  // spawn 會晚一個 microtask，既有測試多是「呼叫後同步對 mock child 發事件」，會整片失效）。
+  // prepareSandboxRun 本來就是 async 且手上有 opts.userId，所以解析放這裡不違反那條。
+  // 客戶沒設 key 時這一行會丟 NO_ANTHROPIC_KEY 往外，刻意不接住：退回平台訂閱等於廠商
+  // 替客戶付錢，而那不會報錯、只會在月底帳單上出現。
+  const auth = { ...(await d.buildClaudeAuthEnv(opts.userId ?? null)) };
+  // 呼叫端覆寫仍然保留：平台管理員存新 token 前會先拿候選 token 實跑一次驗證
+  //（admin-routes.js 的 saveClaudeToken），那條路要能指定用哪一把。
+  if (callerEnv.CLAUDE_CODE_OAUTH_TOKEN) {
+    auth.CLAUDE_CODE_OAUTH_TOKEN = callerEnv.CLAUDE_CODE_OAUTH_TOKEN;
+    // 覆寫平台那把時要把客戶那把拿掉，否則兩把並存，實際生效的是哪一把
+    // 取決於官方優先序（ANTHROPIC_API_KEY > CLAUDE_CODE_OAUTH_TOKEN），驗證會驗到錯的那把。
+    delete auth.ANTHROPIC_API_KEY;
+  }
+  if (!auth.CLAUDE_CODE_OAUTH_TOKEN && !auth.ANTHROPIC_API_KEY) {
+    throw new Error('容器模式需要一把 Anthropic 憑證：平台管理員在設定頁存入 Claude token，或客戶公司設定自己的 API key');
   }
 
   // 家目錄要同時分專案與分公司（lib/agent-home.js）：同一個專案可以綁給不只一家公司，

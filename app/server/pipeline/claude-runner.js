@@ -207,6 +207,13 @@ function runClaude(prompt, opts = {}) {
       // 買不到任何東西。依 token_usage 2183 筆估算，改 5m 淨省約 11% 成本。
       // ⚠ 這條與 lib/token-cost.js 的 cache_create 係數 1.25 綁死：拿掉這個釘子＝實際回到 1h＝2×，
       // 而成本模型不會跟著變，整份帳會靜默低估兩成（且沒有任何測試會紅）。
+      // ⚠ 階段 3 的已知缺口：這條**舊路徑（非容器）**用的是同步的 getClaudeAuthEnv()，
+      // 也就是平台那把共用訂閱——客戶公司的執行若走到這裡，錢會算在廠商頭上，而且不會報錯。
+      // 客戶自帶 key 的解析（buildClaudeAuthEnv）只接在容器路徑（pipeline/sandbox-run.js），
+      // 因為本檔檔頭那條「讀取端必須同步」的限制擋住了在這裡查 DB：改成 await 會讓 spawn
+      // 晚一個 microtask，而既有測試多是「呼叫後同步對 mock child 發事件」，會整片失效。
+      // 正式環境 agent_sandbox_mode='all'（走容器），所以今天不會發生；**但把沙箱模式關掉
+      // 就會靜默發生**。真要補，做法是讓呼叫端先 await 解析好、以 opts 傳進來，而不是在這裡查。
       env: { ...process.env, SECURITY_GUIDANCE_DISABLE: '1', CLAUDE_CODE_PROMPT_CACHE_TTL: '5m', ...getClaudeAuthEnv(), ...aiTokenEnv(), ...aiBaseEnv(), ...(env || {}) },
     };
 
