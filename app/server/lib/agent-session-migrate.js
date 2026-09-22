@@ -23,6 +23,8 @@ async function planSessionCopies(deps = {}) {
   const oldPlatformDir = path.join(src, encodeProjectDir(d.appDir));
   const infoCache = new Map();
   const info = async pid => { if (!infoCache.has(pid)) infoCache.set(pid, await d.getProjectInfo(pid)); return infoCache.get(pid); };
+  // 這裡的路徑刻意維持無公司層：切換日要救的是當時唯一存在的那些 session，它們全是內部公司的，
+  // 而內部公司的桶子就是這個舊路徑（lib/agent-home.js）。客戶公司當時還沒有任何 session 可搬。
   const scopeHome = pid => path.join(d.appDir, 'data', 'agent-home', `project-${pid}`);
   const dest = pid => path.join(scopeHome(pid), '.claude', 'projects');
   const plans = [];

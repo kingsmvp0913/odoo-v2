@@ -302,3 +302,78 @@ test('sandboxMcpConfigPath：有 context7 的關卡生成容器版設定（指�
   expect(sr.sandboxMcpConfigPath('chat-title', { mcpDir: dir, apiKey: 'x' })).toBe(path.join(dir, 'none.json'));
   fs.rmSync(dir, { recursive: true, force: true });
 });
+
+// 意圖（租戶隔離）：家目錄是宿主目錄掛進容器、容器 --rm 之後還在，而一個專案可以綁給
+// 不只一家公司。這一組驗的是「同一個專案的兩家公司拿到不同的 HOME」，以及**授權那條路
+// 完全沒被牽動**——scope 字串、通行證內容、canRun 收到的參數都必須與改動前相同。
+describe('家目錄分公司（不動 scope／授權）', () => {
+  const { profileFor } = require('../lib/agent-profiles');
+  const HOME_OF = argv => argv.find(a => typeof a === 'string' && a.startsWith('HOME='));
+  const legacyHome = scope => path.join(APP, 'data', 'agent-home', scope);
+  // canRun／issueRunToken 收到什麼，逐次記下來
+  const spyDeps = (over = {}) => {
+    const seen = { canRun: [], token: [], mkdir: [] };
+    const { d } = deps({
+      canRun: async (scope, userId) => { seen.canRun.push([scope, userId]); return true; },
+      issueRunToken: (arg) => { seen.token.push(arg); return rt.issueRunToken(arg); },
+      mkdirSync: (p, o) => { seen.mkdir.push([p, o]); },
+      ...over,
+    });
+    return { d, seen };
+  };
+  const run3 = (d, userId) => sr.prepareSandboxRun(
+    { claudeArgs: ARGS, opts: { agentType: 'qa', taskId: 70, userId }, profile: profileFor('qa'), projectId: 3 }, d);
+
+  test('內部公司的執行：HOME 與改動前逐字相同（內部的續接 session 不會斷）', async () => {
+    const { d, seen } = spyDeps({ resolveHomeBucket: async () => null });
+    const run = await run3(d, 7);
+    expect(HOME_OF(run.argv)).toBe(`HOME=${legacyHome('project-3')}`);
+    expect(seen.mkdir).toEqual([[legacyHome('project-3'), { recursive: true, mode: 0o700 }]]);
+    await run.release();
+  });
+
+  test('沒有發起人的系統執行（cron／夜間改善）：落內部桶子，且不必查公司', async () => {
+    let asked = 0;
+    const { d } = spyDeps({ resolveHomeBucket: async (uid) => { asked++; expect(uid).toBeNull(); return null; } });
+    const run = await sr.prepareSandboxRun(
+      { claudeArgs: ARGS, opts: { agentType: 'fix_review' }, profile: profileFor('fix_review'), projectId: null }, d);
+    expect(HOME_OF(run.argv)).toBe(`HOME=${legacyHome('internal-fix')}`);
+    expect(asked).toBe(1);
+    await run.release();
+  });
+
+  test('同一個專案的兩家公司 → 不同 HOME，且客戶的不在內部那包底下', async () => {
+    const { d: dIn } = spyDeps({ resolveHomeBucket: async () => null });
+    const { d: dCo } = spyDeps({ resolveHomeBucket: async () => 'company-2' });
+    const a = await run3(dIn, 7);
+    const b = await run3(dCo, 31);
+    const ha = HOME_OF(a.argv).slice('HOME='.length);
+    const hb = HOME_OF(b.argv).slice('HOME='.length);
+    expect(hb).toBe(path.join(APP, 'data', 'agent-home', 'company-2', 'project-3'));
+    expect(hb).not.toBe(ha);
+    expect(path.relative(ha, hb).startsWith('..')).toBe(true);
+    // 掛載清單裡也只掛得到自己那一個家目錄
+    expect(b.argv.join(' ')).not.toContain(`source=${ha},`);
+    await a.release(); await b.release();
+  });
+
+  test('授權那條路沒被動到：scope 字串、canRun 參數、通行證內容都與專案別無關公司', async () => {
+    const { d, seen } = spyDeps({ resolveHomeBucket: async () => 'company-2' });
+    const run = await run3(d, 31);
+    // scope 仍是 project-<id>，沒有被塞進公司
+    expect(seen.canRun).toEqual([['project-3', 31]]);
+    expect(seen.token[0]).toMatchObject({ scope: 'project-3', projectId: 3 });
+    expect(run.argv).toContain('aidev.scope=project-3');
+    const v = rt.verifyRunToken(run.childEnv.AIDEV_AI_TOKEN);
+    expect(v.ok).toBe(true);
+    expect(v.run).toMatchObject({ scope: 'project-3', projectId: 3 });
+    expect(v.run.endpoints).toEqual(['db', 'wiki', 'tasks', 'glossary']);
+    await run.release();
+  });
+
+  test('canRun 擋下時不會先建出公司目錄', async () => {
+    const { d, seen } = spyDeps({ canRun: async () => false, resolveHomeBucket: async () => 'company-2' });
+    await expect(run3(d, 31)).rejects.toThrow(/未獲准/);
+    expect(seen.mkdir).toEqual([]);
+  });
+});

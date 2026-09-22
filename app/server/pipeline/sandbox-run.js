@@ -9,6 +9,7 @@ const fs = require('fs');
 const path = require('path');
 const { execFile } = require('child_process');
 const { profileFor, runScope } = require('../lib/agent-profiles');
+const { agentHomeDir } = require('../lib/agent-home');
 
 const APP_DIR = path.resolve(__dirname, '..', '..', '..');
 const DEFAULT_TIMEOUT_MS = parseInt(process.env.CLAUDE_AGENT_TIMEOUT_MS || '2400000', 10);
@@ -113,6 +114,7 @@ async function prepareSandboxRun({ claudeArgs, opts = {}, profile, projectId }, 
     removePlatformCleanWorktree: (...a) => require('../lib/platform-worktree').removePlatformCleanWorktree(...a),
     sandboxMcpConfigPath,
     canRun: tok.canRun, issueRunToken: tok.issueRunToken, revokeRun: tok.revokeRun,
+    resolveHomeBucket: (...a) => require('../lib/agent-home').resolveHomeBucket(...a),
     mkdirSync: fs.mkdirSync, execFile,
     getuid: () => process.getuid(), getgid: () => process.getgid(),
     ...deps,
@@ -129,7 +131,11 @@ async function prepareSandboxRun({ claudeArgs, opts = {}, profile, projectId }, 
     throw new Error('容器模式需要管理員在設定頁存入 Claude token（CLAUDE_CODE_OAUTH_TOKEN）；不退回平台主機的憑證檔');
   }
 
-  const home = path.join(APP_DIR, 'data', 'agent-home', scope);
+  // 家目錄要同時分專案與分公司（lib/agent-home.js）：同一個專案可以綁給不只一家公司，
+  // 只分專案會讓後進來的那家公司讀到前一家留在宿主目錄裡的整份逐字稿——容器 --rm，
+  // 但這個目錄是掛進去的、不會跟著消失。內部公司回 null＝沿用舊路徑，續接中的 session 不受影響。
+  const homeBucket = await d.resolveHomeBucket(opts.userId ?? null);
+  const home = agentHomeDir(APP_DIR, scope, homeBucket);
   d.mkdirSync(home, { recursive: true, mode: 0o700 });
   const { runId, token } = d.issueRunToken({
     scope, projectId: scopeProjectId, ttlMs: (opts.timeoutMs ?? DEFAULT_TIMEOUT_MS) + TOKEN_GRACE_MS,
