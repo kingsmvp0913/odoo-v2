@@ -125,7 +125,12 @@ async function resolveSandboxMounts(ctx, deps = {}) {
   if (kind === 'none') { attach(); return { mounts, workdir }; }
 
   const info = await d.getProjectInfo(ctx.projectId);
-  if (!info) throw setupError(`專案 ${ctx.projectId} 沒有 clone 完成的 repo，無法組容器掛載`, '請到專案頁的「Git Repositories」確認 repo 已 clone 完成（還在 clone 就等它跑完；顯示失敗的話按 ↺ 重新 clone），完成後再發一次。');
+  if (!info) {
+    // 訊息給人看，所以指名道姓。getProjectInfo 回 null 時連名字都拿不到（它只撈 clone 完成的
+    // repo），得另外查一次 projects；這是錯誤路徑，多一次 SELECT 不影響正常流程。
+    const { rows: [p] } = await d.query('SELECT name FROM projects WHERE id=$1', [ctx.projectId]);
+    throw setupError(`專案「${p && p.name ? p.name : `#${ctx.projectId}`}」沒有 clone 完成的 repo，無法組容器掛載`, '請到專案頁的「Git Repositories」確認 repo 已 clone 完成（還在 clone 就等它跑完；顯示失敗的話按 ↺ 重新 clone），完成後再發一次。');
+  }
 
   const projectData = () => {
     const major = d.majorOf(info.odoo_version);
@@ -137,7 +142,7 @@ async function resolveSandboxMounts(ctx, deps = {}) {
   let taskTaskId = null;
   if (ctx.taskDbId != null && (kind === 'task-worktree' || kind === 'task-worktree-or-none' || kind === 'task-worktree-or-clone')) {
     const { rows: [t] } = await d.query('SELECT task_id, project_id FROM tasks WHERE id=$1', [ctx.taskDbId]);
-    if (!t || Number(t.project_id) !== Number(ctx.projectId)) throw new Error(`任務 ${ctx.taskDbId} 不屬於專案 ${ctx.projectId}`);
+    if (!t || Number(t.project_id) !== Number(ctx.projectId)) throw new Error(`任務 ${ctx.taskDbId} 不屬於專案「${info.name}」`);
     wt = d.worktreeParent(info.root, t.task_id);
     taskTaskId = t.task_id;
   }

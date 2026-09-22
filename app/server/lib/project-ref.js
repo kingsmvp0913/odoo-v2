@@ -13,4 +13,13 @@ async function resolveProjectId(project) {
   return rows.length ? rows[0].id : null;
 }
 
-module.exports = { resolveProjectId };
+// 反方向：拿 project_id 換「人看得懂的稱呼」，給錯誤訊息與 log 用。
+// 訊息裡寫「專案 7」等於要讀的人自己去翻資料庫才知道是哪一家客戶，實務上沒人翻。
+// 查不到名字（專案已刪／id 是髒資料）才退回 #id——此時 id 本身就是唯一線索，不得吞掉。
+async function projectLabel(projectId) {
+  if (projectId == null) return '（未指定專案）';
+  const { rows } = await query('SELECT name FROM projects WHERE id=$1', [projectId]);
+  return rows[0] && rows[0].name ? rows[0].name : `#${projectId}`;
+}
+
+module.exports = { resolveProjectId, projectLabel };

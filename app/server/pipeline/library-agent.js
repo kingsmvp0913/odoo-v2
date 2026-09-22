@@ -428,7 +428,7 @@ ${manifests.map(m => `=== ${m.module} ===\n${m.content}`).join('\n\n')}`;
     if (p) { overviewTitle = p.title || overviewTitle; overviewContent = p.content || overviewContent; overviewDesc = p.description || overviewDesc; }
   } catch (err) {
     await logFailedUsage({ projectId }, userId, 'wiki', err);
-    console.error(`[LIBRARY-AGENT] init overview error project ${projectId}:`, err.message);
+    console.error(`[LIBRARY-AGENT] init overview error 專案「${project.name}」:`, err.message);
   }
   const overviewId = await _upsertNode(projectId, null, 'overview', 'overview', overviewTitle, overviewContent, overviewDesc);
 

@@ -23,6 +23,7 @@
  * 不依名稱樣式批次操作容器——正式機是 Linux 且同機跑著其他服務，這條界線不能越。
  */
 const { query } = require('../db');
+const { projectLabel } = require('../lib/project-ref');
 
 // 只有這兩關會在容器內留下一次性 odoo 進程（deploy 的 upgradeModules、E2E 的 runTourTests）。
 // 其餘關卡跑的是 claude 子進程，死在宿主上，容器裡沒有殘留可清。
@@ -65,14 +66,14 @@ async function clearInterruptedUpgrades(deps = {}) {
     if (now() - startedAt >= budgetMs) {
       stats.overBudget++;
       // 不得靜默截斷：跳過等於這個專案的殘留還在，下一輪 deploy 仍可能雙輸並被誤歸因。
-      console.error(`[STARTUP] 專案 ${projectId} 的測試區未清理（啟動預算 ${budgetMs}ms 已用盡），殘留的升級進程可能造成本輪 deploy 失敗`);
+      console.error(`[STARTUP] 專案「${await projectLabel(projectId)}」的測試區未清理（啟動預算 ${budgetMs}ms 已用盡），殘留的升級進程可能造成本輪 deploy 失敗`);
       continue;
     }
     try {
       const r = await restartEnv(projectId);
       if (r && r.ok) {
         stats.restarted++;
-        console.log(`[STARTUP] 專案 ${projectId} 的測試區已重啟，清掉中斷殘留的升級進程`);
+        console.log(`[STARTUP] 專案「${await projectLabel(projectId)}」的測試區已重啟，清掉中斷殘留的升級進程`);
       } else {
         // 容器沒在跑＝進程隨容器一起沒了，本來就無殘留可清，不是失敗。
         stats.skipped++;
@@ -80,7 +81,7 @@ async function clearInterruptedUpgrades(deps = {}) {
     } catch (e) {
       // 清理失敗不擋啟動：最壞退回現況（殘留照舊），而擋住啟動是全平台停擺。
       stats.failed++;
-      console.error(`[STARTUP] 專案 ${projectId} 的測試區重啟失敗（殘留未清）：${e.message}`);
+      console.error(`[STARTUP] 專案「${await projectLabel(projectId)}」的測試區重啟失敗（殘留未清）：${e.message}`);
     }
   }
   return stats;
@@ -119,11 +120,11 @@ async function releaseInterruptedSetups(deps = {}) {
     try {
       await stopEnv(projectId);
       stats.released++;
-      console.log(`[STARTUP] 專案 ${projectId} 的測試區建立被重啟打斷，已收回資源並回到可重建狀態`);
+      console.log(`[STARTUP] 專案「${await projectLabel(projectId)}」的測試區建立被重啟打斷，已收回資源並回到可重建狀態`);
     } catch (e) {
       // 絕不能讓它留在 setting_up：那是「建立中」的畫面，沒有任何路徑會再推進它，使用者永遠轉圈。
       stats.failed++;
-      console.error(`[STARTUP] 專案 ${projectId} 的中斷環境收拾失敗，退回標記 error 交人工：${e.message}`);
+      console.error(`[STARTUP] 專案「${await projectLabel(projectId)}」的中斷環境收拾失敗，退回標記 error 交人工：${e.message}`);
       await query(
         "UPDATE odoo_envs SET status='error', error_msg=$2, updated_at=NOW() WHERE project_id=$1",
         [projectId, `伺服器重啟中斷建立程序，且清理失敗（${e.message}）——請在專案環境頁重新建立`]
@@ -155,7 +156,7 @@ async function failInterruptedClones() {
      WHERE clone_status='cloning' RETURNING id, label, project_id`
   );
   for (const r of rows) {
-    console.warn(`[STARTUP] repo ${r.id}（${r.label}，專案 ${r.project_id}）的 clone 被重啟打斷，已標記 error 待人工重新 clone`);
+    console.warn(`[STARTUP] repo ${r.id}（${r.label}，專案「${await projectLabel(r.project_id)}」）的 clone 被重啟打斷，已標記 error 待人工重新 clone`);
   }
   return { failed: rows.length };
 }

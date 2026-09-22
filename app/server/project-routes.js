@@ -767,7 +767,9 @@ function registerRoutes(app) {
         // repo_url 用正規化後的值比對：差一個 `.git`、一條尾斜線、或 https 與 git@ 寫法不同，
         // 指的都是同一個遠端，但字串完全相等比對會全部放行。
         const { rows: siblings } = await query(
-          'SELECT project_id, base_branch, repo_url, remote_ai_branch FROM project_repos WHERE project_id<>$1',
+          `SELECT pr.project_id, pr.base_branch, pr.repo_url, pr.remote_ai_branch, p.name AS project_name
+             FROM project_repos pr JOIN projects p ON p.id = pr.project_id
+            WHERE pr.project_id <> $1`,
           [req.params.id]
         );
         const mineUrl = normalizeRepoUrl(repo_url);
@@ -791,9 +793,9 @@ function registerRoutes(app) {
           // 訊息要指一條真的走得通的路。舊版對「落點未知」叫人「先為該專案指定主分支」，但
           // PUT 明文拒絕事後修改 base_branch（見下方端點），使用者照做只會撞到第二道拒絕。
           const MSG = {
-            bare: `專案 #${s.project_id} 已經把這個 repo 的 AI 產出放在裸的 ai-dev 分支上。遠端只要存在 ai-dev，任何專案都會優先沿用它，改選主分支也躲不開，兩邊會互相覆蓋。可行的做法是先在 GitHub 上把 ai-dev 合併回主分支並刪除遠端 ai-dev，兩邊各自重新加入這個 repo，之後才會長出帶主分支後綴的 AI 分支。`,
-            auto: `專案 #${s.project_id} 也在用這個 repo，而兩邊都沒有指定主分支——同一個 repo 自動偵測出來的主分支必然相同，會落在同一條遠端 AI 分支（${theirs || `${AI_BRANCH}-<偵測到的主分支>`}）而互相覆蓋。請在本次新增時明確指定一個與它不同的主分支（主分支只有新增這一次可以選，之後不能修改）。`,
-            same: `專案 #${s.project_id} 已經以「${s.base_branch || '自動偵測'}」使用這個 repo，兩者會共用同一條遠端 AI 分支（${theirs}）而互相覆蓋。請改選其他主分支。`,
+            bare: `專案「${s.project_name}」已經把這個 repo 的 AI 產出放在裸的 ai-dev 分支上。遠端只要存在 ai-dev，任何專案都會優先沿用它，改選主分支也躲不開，兩邊會互相覆蓋。可行的做法是先在 GitHub 上把 ai-dev 合併回主分支並刪除遠端 ai-dev，兩邊各自重新加入這個 repo，之後才會長出帶主分支後綴的 AI 分支。`,
+            auto: `專案「${s.project_name}」也在用這個 repo，而兩邊都沒有指定主分支——同一個 repo 自動偵測出來的主分支必然相同，會落在同一條遠端 AI 分支（${theirs || `${AI_BRANCH}-<偵測到的主分支>`}）而互相覆蓋。請在本次新增時明確指定一個與它不同的主分支（主分支只有新增這一次可以選，之後不能修改）。`,
+            same: `專案「${s.project_name}」已經以「${s.base_branch || '自動偵測'}」使用這個 repo，兩者會共用同一條遠端 AI 分支（${theirs}）而互相覆蓋。請改選其他主分支。`,
           };
           return res.status(409).json({ error: MSG[kind] });
         }

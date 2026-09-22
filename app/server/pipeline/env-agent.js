@@ -12,6 +12,7 @@ const { startProjectVpns, stopProjectVpns } = require('../lib/project-vpn');
 const { syncNginxMapDebounced } = require('../lib/nginx-map');
 const { resolveEnterprisePath } = require('../lib/enterprise-sources');
 const { ensureTestEnvDbRole, loadTestEnvDbCreds, testEnvDbArgs, roleNameFor } = require('../lib/testenv-db-role');
+const { projectLabel } = require('../lib/project-ref');
 
 // 測試環境一律建在專案內 odoo-v2/odoo-envs（比照 REPOS_BASE 慣例），不得跑到專案外
 const ENV_BASE = process.env.ODOO_ENV_BASE || path.resolve(__dirname, '..', '..', '..', 'odoo-envs');
@@ -124,7 +125,7 @@ async function _failEnv(projectId, msg, log) {
     const ctx = await dockerCtxFor(projectId);
     if (ctx) await dockerEnv.removeContainer(ctx.container);
   } catch (e) {
-    console.error(`[env-agent] 專案 ${projectId} 建置失敗後移除容器失敗（仍照常歸還埠）：${e.message}`);
+    console.error(`[env-agent] 專案「${await projectLabel(projectId)}」建置失敗後移除容器失敗（仍照常歸還埠）：${e.message}`);
   }
   await query(
     "UPDATE odoo_envs SET status='error', port=NULL, error_msg=$2, setup_log=$3, updated_at=NOW() WHERE project_id=$1",

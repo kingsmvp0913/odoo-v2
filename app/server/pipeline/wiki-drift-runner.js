@@ -1,5 +1,6 @@
 const { query } = require('../db');
 const { refreshWikiNode } = require('./library-agent');
+const { projectLabel } = require('../lib/project-ref');
 
 // 獨立 runner：把已分類的「wiki 頁與程式碼漂移」回報，套用成「從程式碼重生該頁」的安全更新。
 // 刻意獨立於 wiki-drift.js（回報／分類）與 cron（排程）：這裡只做「動作面」——決定哪些頁要重生、去重、標記。
@@ -38,7 +39,7 @@ async function applyPendingWikiDrift() {
         refreshed++;
       } catch (err) {
         // 頁不存在(404)／不可重生(400)／生成失敗(500)：不卡佇列，標記已處理並留痕，不無限重試
-        console.error(`[WIKI-DRIFT-RUNNER] 自動重生失敗 project ${g.project_id} slug ${g.slug}:`, err.message);
+        console.error(`[WIKI-DRIFT-RUNNER] 自動重生失敗 專案「${await projectLabel(g.project_id)}」 slug ${g.slug}:`, err.message);
       }
     }
     // 標記這一頁本輪所有待處理回報為已套用（等同上面選到的那一組，免陣列參數）

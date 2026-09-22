@@ -658,7 +658,7 @@ test('POST repos：同 repo 同主分支的第二個專案 → 409，並指名�
   const res = await request(app).post(`/api/projects/${p2}/repos`).set('Authorization', `Bearer ${token}`)
     .send({ label: 'main', repo_url: url, base_branch: 'kangyue' });
   expect(res.status).toBe(409);
-  expect(res.body.error).toContain(`#${p1}`);       // 指名佔用者，否則使用者無從查起
+  expect(res.body.error).toContain('clash-first');  // 指名佔用者要用專案名稱：id 對使用者沒有意義，看了還是不知道是哪一家
   expect(res.body.error).toContain('ai-dev-kangyue');
 });
 
@@ -689,7 +689,7 @@ test('POST repos：repo_url 只差 .git／尾斜線也算同一個 repo → 照�
   const res = await request(app).post(`/api/projects/${p2}/repos`).set('Authorization', `Bearer ${token}`)
     .send({ label: 'main', repo_url: 'https://example.com/o/norm/', base_branch: 'kangyue' });
   expect(res.status).toBe(409);
-  expect(res.body.error).toContain(`#${p1}`);
+  expect(res.body.error).toContain('norm-first');
 });
 
 // 意圖：ensureAiBranch 遇到遠端已有裸 origin/ai-dev 時走「裸名優先」，完全無視 base_branch——
@@ -751,7 +751,7 @@ test('POST repos：兩邊都沒指定主分支 → 409，且訊息指的是本�
   const res = await request(app).post(`/api/projects/${p2}/repos`).set('Authorization', `Bearer ${token}`)
     .send({ label: 'main', repo_url: url });
   expect(res.status).toBe(409);
-  expect(res.body.error).toContain(`#${p1}`);
+  expect(res.body.error).toContain('bothauto-first');
   // 舊訊息叫人去改「對方專案」的主分支，那條路被 PUT 擋死；能走的是本次新增時自己指定一條
   expect(res.body.error).not.toContain('請先為該專案指定主分支');
   expect(res.body.error).toContain('指定');
