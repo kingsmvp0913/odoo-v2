@@ -583,13 +583,24 @@ async function buildWindowSummary(sinceAt, untilAt = null) {
  * 完全沒有訊號，所以使用者實際感受到的「鬼打牆、廢話太多」健檢一律報平安（2026-09-05 回報）。
  *
  * 兩個指標都刻意選「不必讀懂內容就算得出來」的：
- * - verbosity：AI 回覆長度 ÷ 使用者提問長度。實測全平台落在 11~36 倍，中位數約 15。
+ * - ai_chars：AI 每則回覆的平均字數（絕對值）。這是「答得囉不囉嗦」現在的量尺。
  * - self_correct：AI 在自己的回覆裡承認上一輪判斷錯。這是「鬼打牆」唯一留得下痕跡的地方
  *   ——使用者用領域知識糾正、AI 才修，等於使用者在幫它除錯。
+ *
+ * ⚠ `verbosity_ratio_*`（AI 回覆長度 ÷ 使用者提問長度）已於 2026-09-22 廢用，保留只為不動既有
+ * 測試與歷史對照，**不得再拿來判斷 AI 是否囉嗦**：分母由使用者決定，本平台使用者多為熟手、
+ * 提問常只有十幾字，分母一小比值就衝高，於是「使用者問得精簡」被記成「AI 太囉嗦」。三輪自我
+ * 證偽——p50 走 15.1→17.9→1.7、max 走 44.4→138.4→47.5→19.7，動的是分母不是 chat 品質
+ * （2026-09-21 使用者回報）。所以 worst 的次鍵也改用 ai_chars，不再用比值。
  *
  * ⚠ self_correct 是**啟發式關鍵字比對**，不是語意判斷：會漏（換個說法就抓不到）、也會誤判
  * （正常的「你說的對」被算進去）。它的用途是「哪幾場值得人去看」，不是精確計數——
  * 拿它當提案的唯一證據不成立，要點進那場對話確認過才算。
+ *
+ * ⚠ 它只該記「AI 承認自己前面弄錯」。**「誠實標示推論限度」不是缺陷，不得計入**：裸的
+ * 「不完全是／不完全正確」原本被算成一次自我更正，但那句話多半是 AI 在替結論加但書，或在
+ * 部分否定使用者的前提，兩者都是好行為，卻足以把該場對話推上 worst 第一名（2026-09-21
+ * 使用者回報 chat 142）。要判自我更正，句子得自己帶出「錯的是我前面說的東西」。
  *
  * ⚠ 長度、截斷、關鍵字比對全部在 JS 做，SQL 只負責把列撈出來：pg-mem 連 `length()` 與
  * `LEFT()` 都沒有（實測 `function length(text) does not exist`），寫進 SQL 會變成
@@ -609,7 +620,8 @@ const SELF_CORRECT_RE = new RegExp([
   '之前都沒',                                                          // 「沒有，之前都沒排除」
   '你[^。！？\\n]{0,8}(?:是對的|說的對|說得對|講的對|講得對|沒說錯|沒錯)',  // 你這個顧慮是對的
   '你抓到(?:重點|關鍵|問題)',
-  '不完全(?:是|對|正確)',
+  // 「不完全是／不完全正確」刻意不收：見上方「誠實標示推論限度不是缺陷」。真的在更正自己時，
+  // 同一則裡會另有帶主詞的更正句（如「不完全是，我剛才漏查了 depends」）把它記到。
   '(?:上一輪|上一則|上一次|先前|前面那)[^。！？\\n]{0,10}(?:錯|有誤|不對|不成立|要改|收回|作廢)',
   // 「推翻」是中文裡最直白的更正措辭，卻兩次加寬都沒進來（2026-09-11 使用者回報：本輪兩場
   // 明確推翻自己前一輪結論的對話，全場零命中）。兩個方向都要：更正對象寫在前（我上一輪的結論
@@ -665,22 +677,36 @@ async function buildChatQuality(args, upTo) {
       chat_id: c.chat_id,
       title: (c.title || '').slice(0, 40),
       ai_turns: c.ai.length,
+      ai_chars: Math.round(avg(c.ai)),
       ratio: r1(avg(c.ai) / (avg(c.user) || 1)),
       self_correct: c.self_correct
     }));
   if (!chats.length) return { chats: 0, note: '窗內沒有來回兩輪以上的對話，這個區塊不成立（不是「都很好」）' };
 
   const ratios = chats.map(c => c.ratio).sort((a, b) => a - b);
+  const aiChars = chats.map(c => c.ai_chars).sort((a, b) => a - b);
   return {
     chats: chats.length,
     ai_turns: chats.reduce((s, c) => s + c.ai_turns, 0),
-    // p50 而非平均：一場 34 倍的對話會把平均拉到看不出常態
+    // 現行量尺：每場「AI 回覆平均字數」的分布。p50 而非平均——一場特別長的對話會把平均拉走
+    ai_chars_p50: Math.round(pct(aiChars, 0.5)),
+    ai_chars_max: aiChars[aiChars.length - 1],
     verbosity_ratio_p50: r1(pct(ratios, 0.5)),
     verbosity_ratio_max: ratios[ratios.length - 1],
+    // 這段是寫給讀這包資料的健檢 AI 看的：它的提示詞裡還留著舊量尺與舊基線，而兩者現在都已
+    // 不成立。量尺換掉卻沒人告知消費端，比不換更糟——會拿新數字去比舊基線。
+    scale_note: '⚠ 量尺已於 2026-09-22 更正，以本段為準，不要沿用提示詞裡的舊基線：'
+      + '(1) verbosity_ratio_* 已廢用——分母是使用者提問長度，量到的是使用者問得長不長，'
+      + '本平台提問常只有十幾字，分母一小比值就衝高（三輪 p50 15.1→17.9→1.7 是分母在動，'
+      + '不是 chat 品質在動）。判斷 AI 囉不囉嗦一律改看 ai_chars_*（AI 每則回覆平均字數，'
+      + '與提問長度無關）；它沒有歷史基線，本輪起自行累積，不得拿 15.1／44.4 來比。'
+      + '(2) self_correct 自同日起不再把「不完全是」這類標示推論限度的措辭算成缺陷，'
+      + '數字比舊基線（34 場中 10 場、18 輪）低是定義變嚴，不是品質改善，兩者不可比。',
     self_correcting_chats: chats.filter(c => c.self_correct > 0).length,
     self_correct_turns: chats.reduce((s, c) => s + c.self_correct, 0),
-    // 只給最差三場：這個區塊是要讓人「知道去看哪一場」，列滿只會把訊號淹掉
-    worst: chats.sort((a, b) => (b.self_correct - a.self_correct) || (b.ratio - a.ratio)).slice(0, 3)
+    // 只給最差三場：這個區塊是要讓人「知道去看哪一場」，列滿只會把訊號淹掉。
+    // 次鍵是 ai_chars 不是 ratio——用比值排等於把「提問最精簡的使用者」排到最前面。
+    worst: chats.sort((a, b) => (b.self_correct - a.self_correct) || (b.ai_chars - a.ai_chars)).slice(0, 3)
   };
 }
 
