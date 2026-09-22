@@ -53,7 +53,13 @@ describe('admin 專屬路由都掛了 requiresAdmin', () => {
 // 不是 /admin 開頭、但只給管理員的頁面。放白名單管理而不是自動推導：
 // 這種頁面每多一個都該有人明確想過「為什麼它是 admin only」。
 describe('非 /admin 前綴的 admin-only 頁面', () => {
-  const ADMIN_ONLY_OUTSIDE = ['/token-report'];  // 用量報表含全平台成本，僅管理員可見
+  const ADMIN_ONLY_OUTSIDE = [
+    '/token-report',  // 用量報表含全平台成本，僅管理員可見
+    '/companies',     // 公司管理（3b Task 8）：建立／停用客戶公司、設定 GIT 憑證，僅平台管理員可見
+    '/architecture',  // 架構圖（3b Task 1）：平台內部實作細節
+    '/pipeline-flow', // 流程圖（3b Task 1）：同上
+    '/task/:id/terminal', // 終端機（3b Task 1）：能直接對任務所在容器下指令
+  ];
 
   test.each(ADMIN_ONLY_OUTSIDE)('%s 仍是 admin only', (p) => {
     const block = routeBlocks.find((r) => r.path === p);
@@ -63,12 +69,27 @@ describe('非 /admin 前綴的 admin-only 頁面', () => {
 });
 
 describe('沒有全域 admin gate（NEXT-P0-001 不得復辟）', () => {
-  // guard 本體：從 router.beforeEach 到函式結尾。
+  // guard 本體：從 router.beforeEach 切到它自己的收尾 `\n});`。
+  // 原本這裡寫死 `start + 1200`，而區塊當下實際是 1245 字元——最後 45 字元
+  // （/company-users 分支的結尾）根本不在下面任何一條斷言的視野內。
+  // 那不是「總有一天會截到」，是當下就已經截掉了。
+  // 改用 frontend-tenant-guard.test.js 切同一個區塊的作法（收尾錨點），不另創第三種寫法。
   const guard = (() => {
     const start = APP_JS.indexOf('router.beforeEach');
-    expect(start).toBeGreaterThan(-1);
-    return APP_JS.slice(start, start + 1200);
+    const end = APP_JS.indexOf('\n});', start);
+    return start < 0 || end < 0 ? '' : APP_JS.slice(start, end + 4);
   })();
+
+  // 切片失敗時整個 describe 會退化成「什麼都沒比對到」的假綠，所以先釘住切片本身。
+  test('guard 整段切得到（切不到就不是綠燈，是守衛失效）', () => {
+    expect(guard.length).toBeGreaterThan(400);
+    expect(guard.trimEnd().endsWith('});')).toBe(true);
+    // 釘住它是為了抓「結尾錨點配得太早」——切片若在中途收尾，這個字串就不在裡面。
+    // （更正：/company-users 這個字面在舊的 1200 視窗內就看得到，位於切片 offset 887；
+    //  掉在視野外的是它 catch 區塊的尾巴那 45 個字。）
+    expect(`/company-users 在切片內: ${guard.includes('/company-users')}`)
+      .toBe('/company-users 在切片內: true');
+  });
 
   test('requiresAuth 的分支只驗登入，不碰 role', () => {
     // 抓 requiresAuth 那一段（到下一個 if 為止），裡面不該出現 role。
@@ -77,6 +98,10 @@ describe('沒有全域 admin gate（NEXT-P0-001 不得復辟）', () => {
     expect(m[0]).not.toMatch(/\brole\b/);
   });
 
+  // ⚠ 這個標題比它實際驗到的東西大：下面的正則從 requiresAdmin 抓到該區塊自己的收尾大括號為止，
+  // 驗的是「requiresAdmin 分支裡有 role」，不是「別的分支裡沒有 role」。
+  // 後加的 requiresInternal 分支（不得出現 role）由 frontend-tenant-guard.test.js 驗，
+  // 它把整段 beforeEach 切乾淨再逐分支比對。
   test('role 檢查只出現在 requiresAdmin 分支內', () => {
     const m = guard.match(/if\s*\([^)]*requiresAdmin[^)]*\)\s*\{[\s\S]*?\n\s{2}\}/);
     expect(m).not.toBeNull();

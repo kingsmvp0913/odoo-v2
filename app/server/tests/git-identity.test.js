@@ -67,6 +67,26 @@ test('pickGitIdentity 只留作者／提交者身分', () => {
   expect(gitId.pickGitIdentity(null)).toEqual({});
 });
 
+// 意圖（全跑修法波第 9 項）：PAT 只能走 env，不能進子行程的 argv——同 uid 的人讀得到
+// /proc/<pid>/cmdline，argv 等於直接外洩。buildGitEnvFromPat 的注釋宣稱這個不變式，
+// 這支釘住它：PAT 只出現在 GIT_PAT 這個 env 值裡，而讀它的 git-askpass.js 只從
+// process.env 取，argv（process.argv[2]）只用來判斷 prompt 種類，不曾承載過 PAT。
+test('buildGitEnvFromPat：PAT 只進 env（GIT_PAT），不進任何看起來像指令參數的欄位', () => {
+  const env = gitId.buildGitEnvFromPat('ghp_never_in_argv');
+  expect(env.GIT_PAT).toBe('ghp_never_in_argv');
+  // 除了 GIT_PAT 本身，其餘欄位都不該帶著這把密鑰重複出現
+  for (const [key, value] of Object.entries(env)) {
+    if (key === 'GIT_PAT') continue;
+    expect(value).not.toBe('ghp_never_in_argv');
+  }
+  const askpassSrc = require('fs').readFileSync(
+    path.join(__dirname, '..', 'lib', 'git-askpass.js'), 'utf8'
+  );
+  expect(askpassSrc).toMatch(/process\.env\.GIT_PAT/);
+  // argv 只拿來判斷 prompt 是 Username 還是 Password，不能是 PAT 的來源
+  expect(askpassSrc).not.toMatch(/argv\[\d+\]\s*\|\|\s*pat|pat\s*=\s*process\.argv/);
+});
+
 test('task-agent 不再把整包 gitEnv 交給 AI', () => {
   const src = require('fs').readFileSync(require('path').join(__dirname, '..', 'pipeline', 'task-agent.js'), 'utf8');
   expect(src).not.toMatch(/env:\s*\{\s*\.\.\.gitEnv\s*\}/);

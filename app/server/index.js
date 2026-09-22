@@ -27,6 +27,8 @@ const { registerRoutes: registerSearchRoutes } = require('./search-routes');
 const { registerRoutes: registerDeployRoutes } = require('./deploy-routes');
 const { registerRoutes: registerDocsRoutes } = require('./docs-routes');
 const { registerRoutes: registerAiPlatformRoutes } = require('./ai-platform-routes');
+const { registerRoutes: registerCompanyAdminRoutes } = require('./company-admin-routes');
+const { registerRoutes: registerCompanyRoutes } = require('./company-routes');
 
 const PORT = process.env.PORT || 3939;
 
@@ -77,8 +79,13 @@ function createApp() {
 
   app.use(express.static(path.join(__dirname, '../public')));
 
-  // 未核准閘門：擋「已登入但 approved=false」的自助註冊帳號碰工作台 API。
-  // 白名單（auth/setup/settings/system config）放行——註冊精靈要能靠 register token 設定憑證。
+  // 未核准閘門：擋「approved=false」的帳號碰工作台 API。
+  // 2026-09-21（規格 §8 P3，Task 8）：自助註冊已關閉，approved=false 現在只剩一種意思——
+  // 被公司管理員收回存取權，不會再有「剛註冊、待審核」的帳號。下面白名單原本是為了讓
+  // 自助註冊拿到的 register token 能先跑 /auth、/settings 完成設定精靈，這個情境已經不存在，
+  // 但這個區塊本身**不是死碼、不能刪**：它註冊在所有 registerXRoutes(app) 之前，Express
+  // 依註冊順序執行，對非白名單路徑（如 /tasks）它是唯一先於各路由自己 verifyToken 檢查、
+  // 會直接 403 短路的機制——拿掉就等於拿掉那些路徑前面唯一的守衛。
   // 無 token／壞 token 不在此擋（交各路由 verifyToken 回 401），只認得出、且未核准的才 403。
   {
     const jwt = require('jsonwebtoken');
@@ -96,7 +103,11 @@ function createApp() {
       try {
         const { rows } = await query('SELECT role, approved FROM users WHERE id=$1', [userId]);
         if (rows[0] && rows[0].role !== 'admin' && rows[0].approved === false) {
-          return res.status(403).json({ error: '帳號審核中，管理員核准後即可使用', pendingApproval: true });
+          // 2026-09-21（Task 8c）：自助註冊已關閉，approved=false 現在只剩「被公司管理員停用」
+          // 一種意思，不會再有「剛註冊、待審核」的帳號——訊息要講真話，不能暗示這是暫時的、
+          // 等一下就會自己過。旗標名稱 pendingApproval 刻意不改：改名會波及既有斷言它的測試，
+          // 對使用者又沒有任何好處，保留只是為了不動那些斷言。
+          return res.status(403).json({ error: '此帳號已停用，請聯絡貴公司的管理員', pendingApproval: true });
         }
       } catch { /* 查詢失敗不阻斷：交下游處理 */ }
       next();
@@ -120,6 +131,10 @@ function createApp() {
     // 這關會悄悄放行本該擋下的請求。正式環境不會缺 JWT_SECRET（啟動腳本擋著不給開機），
     // 但兩處各自求值本身就是地雷，靠共用同一個常數消掉。
     const { JWT_SECRET } = require('./auth');
+    // 判斷本體在 lib/tenant-access.js 的 isCompanyUsable：這一關與 buildActor 必須同一套
+    // 答案，各寫一份就會出現「閘門放行、buildActor 卻標成不可用」這種自相矛盾的狀態。
+    // 跟上面幾個 require 一樣提到 app.use 外面——這支 handler 每個 /api 請求都會跑。
+    const { isCompanyUsable } = require('./lib/tenant-access');
     app.use('/api', async (req, res, next) => {
       if (req.method === 'GET' && req.path === '/auth/me') return next();
       const header = req.headers.authorization;
@@ -136,11 +151,7 @@ function createApp() {
         // JOIN 沒撈到 ⇒ 這個人沒有公司（平台管理員，或遷移還沒跑的舊帳號）⇒ 放行
         if (!rows[0]) return next();
         const r = rows[0];
-        const now = new Date();
-        const usable = r.is_active === true
-          && (!r.active_from || now >= new Date(r.active_from))
-          && (!r.active_until || now <= new Date(r.active_until));
-        if (!usable) {
+        if (!isCompanyUsable(r.is_active, r.active_from, r.active_until, new Date())) {
           return res.status(403).json({ error: '公司帳號已停用或不在使用期間', companyUnusable: true });
         }
       } catch {
@@ -175,6 +186,8 @@ function createApp() {
   registerSearchRoutes(app);
   registerDeployRoutes(app);
   registerAiPlatformRoutes(app);
+  registerCompanyAdminRoutes(app);
+  registerCompanyRoutes(app);
 
   // Manual sync / pipeline endpoints
   const { verifyToken } = require('./auth');

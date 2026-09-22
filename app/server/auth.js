@@ -8,7 +8,9 @@
 const jwt = require('jsonwebtoken');
 const { query } = require('./db');
 const { hashPassword, checkPassword } = require('./password');
-const { redactSettings } = require('./lib/user-settings');
+const { redactSettings, CUSTOMER_SETTINGS_WHITELIST } = require('./lib/user-settings');
+const { FEATURES, companyHasFeature } = require('./lib/company-features');
+const { isCompanyUsable } = require('./lib/tenant-access');
 
 const JWT_SECRET = process.env.JWT_SECRET;
 if (!JWT_SECRET) throw new Error('JWT_SECRET environment variable is required');
@@ -26,11 +28,8 @@ function buildActor(userId, row, now = new Date()) {
   const companyId = row.company_id ?? null;
   let companyUsable = true;
   if (companyId !== null) {
-    const from = row.active_from ? new Date(row.active_from) : null;
-    const until = row.active_until ? new Date(row.active_until) : null;
-    companyUsable = row.is_active === true
-      && (from === null || now >= from)
-      && (until === null || now <= until);
+    // 判斷本體在 lib/tenant-access.js 的 isCompanyUsable——全平台同一條規則只能有一份。
+    companyUsable = isCompanyUsable(row.is_active, row.active_from, row.active_until, now);
   }
   return {
     userId,
@@ -63,7 +62,7 @@ async function verifyToken(req, res, next) {
     // 租戶隔離（規格 §5.1）：一次把身分與公司狀態撈齊，後面的路由不必各自再查一次。
     // LEFT JOIN 而不是 JOIN——平台管理員沒有公司，遷移跑完之前一般使用者也還沒有。
     const { rows } = await query(
-      `SELECT u.role, u.company_id, c.name AS company_name, c.is_active, c.is_internal,
+      `SELECT u.role, u.company_id, u.approved, c.name AS company_name, c.is_active, c.is_internal,
               c.active_from, c.active_until
          FROM users u
          LEFT JOIN companies c ON c.id = u.company_id
@@ -72,6 +71,15 @@ async function verifyToken(req, res, next) {
     );
     if (!rows.length) return res.status(401).json({ error: 'Invalid token' });
     const r = rows[0];
+    // 停用（規格 §8 P6 補充，2026-09-21 盤查）：公司管理員按下停用只把 approved 設 false，
+    // 若這裡不擋，對方手上還沒過期的 token（最長 7 天）照樣能打通所有 API——停用等於做半套。
+    // 判斷式必須是 `=== false`：這欄多數既有帳號是 NULL（含平台管理員），`!r.approved` 會把
+    // 從沒被寫過這欄的人全部鎖在外面，寫法照抄下面 auth.js 登入檢查的既有寫法。
+    // 平台管理員豁免（照抄 index.js:105 的既有寫法，兩處必須一致）：公司管理員能改的
+    // PUT /api/admin/users/:id 若誤把平台管理員設成 approved=false，唯一的復原端點
+    // （PUT /api/company/users/:id/active）比對 company_id，平台管理員永遠沒有公司，
+    // 不豁免就是把他鎖死在自己的平台外面、連 /api/auth/me 都進不去。
+    if (r.role !== 'admin' && r.approved === false) return res.status(403).json({ error: '帳號已停用' });
     req.role = r.role;
     // 語意不變：全平台至少 6 處自己查 role === 'admin'，這裡改了就會全面走樣
     req.isAdmin = r.role === 'admin';
@@ -134,32 +142,13 @@ function registerRoutes(app) {
     }
   });
 
-  // POST /api/auth/register — 自助註冊（建 pending 帳號，回 token 供本次引導精靈設定憑證）。
-  // 與 setup 不同：users 非空也可註冊；一律 role='user'、approved=false（唯一寫 false 的路徑）。
-  app.post('/api/auth/register', async (req, res) => {
-    try {
-      const { username, password, display_name } = req.body;
-      if (!username || !password || !display_name) {
-        return res.status(400).json({ error: 'username, password, display_name required' });
-      }
-      if (password.length < 8) return res.status(400).json({ error: '密碼至少 8 個字元' });
-
-      const password_hash = await hashPassword(password);
-      // 租戶隔離：自助註冊一律 role='user'（非平台管理員），預設掛內部公司——否則遷移跑完後
-      // company_id 永遠 NULL，canSeeProject 恆為 false，核准之後照樣什麼都看不到。
-      // 此為暫時預設值，子專案 2（Part 2）會在管理員介面改成明確選公司，屆時這裡要拿掉。
-      // 遷移還沒跑之前沒有內部公司，此時就是 no-op（維持 NULL），不因此擋掉註冊。
-      const { rows: internalRows } = await query('SELECT id FROM companies WHERE is_internal = true LIMIT 1');
-      const companyId = internalRows[0] ? internalRows[0].id : null;
-      const { rows: inserted } = await query(
-        'INSERT INTO users (username, password_hash, display_name, role, approved, company_id) VALUES ($1, $2, $3, $4, false, $5) RETURNING id',
-        [username, password_hash, display_name, 'user', companyId]
-      );
-      res.status(201).json({ token: signToken(inserted[0].id) });
-    } catch (err) {
-      if (err.code === '23505') return res.status(409).json({ error: '帳號已存在' });
-      res.status(500).json({ error: err.message });
-    }
+  // 規格 §8 P3：多租戶之後帳號一律由平台管理員或公司管理員建立，自助註冊關閉。
+  // 保留這支路由只為了回一個講得清楚的訊息——整支移除的話舊前端會拿到 404，
+  // 看起來像壞掉而不是像被關閉。
+  // ⚠ 不要因為這支關了就順手動 POST /api/auth/setup：那是全新安裝建第一個管理員的唯一入口，
+  //    它自己的守衛是「users 表不是空的就 403」，與本規則無關。
+  app.post('/api/auth/register', (req, res) => {
+    res.status(403).json({ error: '本平台不開放自助註冊，請聯絡貴公司的管理員開通帳號' });
   });
 
   // POST /api/auth/login — authenticate and return token + user (no password_hash)
@@ -195,9 +184,12 @@ function registerRoutes(app) {
       // 密碼對了 → 這一對的打錯次數歸零（裁決 R17），否則長期零星打錯會累積到永久封鎖。
       // 已封鎖的一對在上面就被擋掉，走不到這裡，所以不會順手解掉封鎖。
       await guard.recordSuccess({ username, source });
-      // 待審核帳號密碼對也不放行（管理員核准前）
+      // 2026-09-21（Task 8c fix round 1）：自助註冊已關閉，approved=false 現在只剩「被公司
+      // 管理員停用」一種意思（理由同 index.js 未核准閘門），這裡不能再講「審核中」——被停用的人
+      // 登出重登入或 token 過期時撞到的就是這一句，訊息要跟 index.js:106 講同一件事，不能取決
+      // 於他先撞到哪個端點。旗標名稱 pendingApproval 刻意不改，理由同上。
       if (user.approved === false) {
-        return res.status(403).json({ error: '帳號審核中，管理員核准後即可登入', pendingApproval: true });
+        return res.status(403).json({ error: '此帳號已停用，請聯絡貴公司的管理員', pendingApproval: true });
       }
 
       const { password_hash, password_enc, ...safeUser } = user;
@@ -215,14 +207,44 @@ function registerRoutes(app) {
         [req.userId]
       );
       if (!rows[0]) return res.status(404).json({ error: 'User not found' });
+      // 3b 需要：前端沒有別的管道知道「我是不是內部人員」「我能不能用哪些功能」。
+      // features 必須算「有效值」而不是直接吐 companies.features——內部公司與平台管理員
+      // 在 companyHasFeature 裡是一律全開的，但他們的欄位是 NULL，直接吐原始值
+      // 會讓前端把他們的入口藏起來（正是 2026-09-21 裁決要避免的結果）。
+      // ⚠ 這裡是每次前端換頁都會打的端點（app.js:300-312 的 router guard，無快取），
+      // 逐項查詢在功能數量是個位數時可接受；功能變多時會變成每次換頁 N 次查詢，
+      // 屆時才需要考慮快取（YAGNI，暫不處理）。
+      const features = {};
+      for (const key of Object.keys(FEATURES)) {
+        features[key] = await companyHasFeature(req.actor.companyId, key);
+      }
       // 密碼不回前端，只回 *_set 旗標（見 lib/user-settings 的 redactSettings）
       // 前端要靠這三個欄位決定顯示什麼（規格 §5.5），以及公司停用時顯示原因
+      const result = { ...rows[0], odoo_settings: redactSettings(rows[0].odoo_settings) };
+      // §8 P2 的另一個出口：settings.js 的 GET /api/settings 已經對客戶濾掉 Odoo／eService 鍵，
+      // 這支同樣整包吐 odoo_settings／sync_interval，漏擋就是同一個洞的另一扇門，套同一份白名單。
+      const canSync = await companyHasFeature(req.actor.companyId, 'odoo_sync');
+      if (!canSync) {
+        if (result.odoo_settings && typeof result.odoo_settings === 'object') {
+          const filtered = {};
+          for (const key of CUSTOMER_SETTINGS_WHITELIST) {
+            if (key in result.odoo_settings) filtered[key] = result.odoo_settings[key];
+          }
+          result.odoo_settings = filtered;
+        }
+        delete result.sync_interval;
+      }
       res.json({
-        ...rows[0],
-        odoo_settings: redactSettings(rows[0].odoo_settings),
+        ...result,
         company_id: req.actor.companyId,
         company_name: req.actor.companyName,
         company_usable: req.actor.companyUsable,
+        // buildActor 的 isInternal 只看「所屬公司是不是內部公司」；平台管理員沒有公司，
+        // row.is_internal 從 LEFT JOIN 撈出來是 NULL，字面比對會算成 false——但平台管理員
+        // 本來就是內部人員。比照 company-features.js 的既有原則（沒有公司 ⇒ 視為內部／全開），
+        // 這裡補上 companyId === null 的情況，不去動 buildActor 本身。
+        is_internal: req.actor.isInternal || req.actor.companyId === null,
+        features,
       });
     } catch (err) {
       res.status(500).json({ error: err.message });

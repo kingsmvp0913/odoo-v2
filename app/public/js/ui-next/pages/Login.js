@@ -249,7 +249,10 @@
             <button class="ui-next-login-link" type="button" @click="goStep(6)" v-if="step >= 2 && step <= 5">全部略過，稍後在設定頁完成</button>
           </template>
 
-          <p v-if="mode === 'login'" class="ui-next-login-footer">還沒有帳號？<button class="ui-next-login-link" type="button" @click="startRegister">註冊新帳號</button></p>
+          <!-- 自助註冊入口已移除：POST /api/auth/register 自 Task 8 起一律回 403（見 server/auth.js），
+               留著入口等於請人走完五步精靈、在第一步就被擋。帳號改由公司管理員或平台管理員建。
+               下面的 register 精靈（startRegister／registerAccount 與 step 1~6 的面板）刻意保留不刪：
+               本次授權只到「隱藏入口」，刪掉五步流程是另一件事，要由開自助註冊與否的決定來帶。 -->
           <button v-if="mode === 'register'" class="ui-next-login-link" type="button" @click="backToLogin">返回登入</button>
         </section>
       </main>

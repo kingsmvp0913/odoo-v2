@@ -78,6 +78,11 @@ const ROUTES = [
   { key: 'admin-feedback', hash: '#/admin/feedback', auth: 'admin', covered: true },
   { key: 'saas-specs', hash: '#/saas-specs', auth: 'admin', covered: false,
     why: '內容是 .gitignore 內的 docs/ 檔，別台機器與門禁環境沒有；iframe 內另從外部 CDN 載入函式庫與字型，截圖不穩定' },
+  { key: 'company-users', hash: '#/company-users', auth: 'admin', covered: false,
+    why: '功能是公司管理員限定（平台管理員也放行，見 app.js guard），但 rwd 門禁的登入 fixture 只有 admin／user 兩顆帳號、沒有 company_admin 帳號與所屬公司；用 admin fixture 登入雖能通過 guard，後端 company-routes.js 對平台管理員（無公司）回 400，畫面只會停在錯誤訊息，看不到真正的列表／新增／停用內容，截圖沒有意義' },
+  // 平台管理員的公司管理頁（3b Task 8）。單純 requiresAdmin（role==='admin'），
+  // admin fixture 直接放行，不像上面 company-users 那樣卡在「沒有公司」的 400。
+  { key: 'companies', hash: '#/companies', auth: 'admin', covered: true },
   { key: 'styleguide', path: 'styleguide.html', auth: 'none', covered: true, expect: '.sg-wrap' }
 ];
 

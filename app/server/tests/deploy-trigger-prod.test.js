@@ -141,24 +141,42 @@ test('部署失敗仍標記 merged_to_main_at', async () => {
 // 意圖（Rule 9）：這條路徑會 SSH 進客戶的正式機下指令。專用的部署端點（deploy-routes.js）
 // 要求 admin ＋ 明確 confirm，但 /release 原本只驗登入、也不要求確認——等於整套授權
 // 設計可以從這裡繞過去，平台上任何一個非 admin 帳號都按得到客戶的正式機。
-// 合併到 main 那一半維持開放（本來就是），關起來的只有「動客戶正式機」這一半。
+// 舊版煞車只補了一半：合併到 main 維持開放，只擋「動客戶正式機」那一半。
+// 租戶隔離（規格 §4.3／canReleaseProject）把這半套煞車換成整條路徑一律先擋——
+// 一般成員連 merge 都碰不到，不是「合併照做、只是不部署」。
 
-test('非 admin 按上正式：照樣合併到 main，但不部署，且要講出原因', async () => {
+// 舊行為（合併照做、只擋部署）已被 canReleaseProject 的整條擋下取代：一般成員
+// 現在連 merge 都碰不到，main 與客戶正式機都不會被動到。
+test('非 admin 按上正式：403 擋在門口，main 沒被動、正式機也沒被動', async () => {
   const bcrypt = require('bcryptjs');
   const hash = await bcrypt.hash('pass1234', 4);
+  // 這支測的是「上正式權限」本身，所以這位使用者要先能「看得到」這個專案——
+  // 沒有公司、或公司沒綁這個專案的話，呼叫會在 loadProjectForActor 那一層就先被
+  // 擋成 404（規格 §5.2：看不到一律先當它不存在），根本走不到 canReleaseProject
+  // 的角色檢查，這支測試就名不符實、變成在測可見度而不是測上正式權限。
+  const { rows: [co] } = await dbModule.query(
+    "INSERT INTO companies (name, is_active) VALUES ('一般公司', true) RETURNING id"
+  );
   await dbModule.query(
-    "INSERT INTO users (username, password_hash, display_name, role) VALUES ('regular', $1, '一般使用者', 'user') ON CONFLICT (username) DO NOTHING",
-    [hash]
+    'INSERT INTO project_companies (project_id, company_id) VALUES ($1, $2)', [projectId, co.id]
+  );
+  await dbModule.query(
+    "INSERT INTO users (username, password_hash, display_name, role, company_id) VALUES ('regular', $1, '一般使用者', 'user', $2) ON CONFLICT (username) DO NOTHING",
+    [hash, co.id]
   );
   const login = await request(app).post('/api/auth/login').send({ username: 'regular', password: 'pass1234' });
   await addTarget('prod', true);
 
+  const { releaseAiToMain } = require('../pipeline/git');
+  releaseAiToMain.mockClear();   // 先清掉前面測試累積的呼叫次數，只看這次
+
   const res = await release({ confirmDeploy: true }, login.body.token);
-  expect(res.status).toBe(200);
-  expect(res.body.ok).toBe(true);          // 合併照做
-  expect(res.body.deploySkipped).toBe(true);
-  expect(res.body.deploySkipReason).toMatch(/管理員/);
-  expect(runDeployGroup).not.toHaveBeenCalled();   // 客戶正式機一根手指都沒碰到
+  expect(res.status).toBe(403);
+  expect(runDeployGroup).not.toHaveBeenCalled();     // 客戶正式機一根手指都沒碰到
+  expect(releaseAiToMain).not.toHaveBeenCalled();    // main 也沒被動——連 merge 都擋在門口
+
+  const { rows } = await dbModule.query('SELECT merged_to_main_at FROM tasks WHERE task_id = $1', ['task_pa_1']);
+  expect(rows[0].merged_to_main_at).toBeNull();      // 沒有任何任務被標記已上正式
 });
 
 // 意圖：勾選是「我知道失敗時資料庫救不回來」的那一下。沒勾就不准動客戶正式區，

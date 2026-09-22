@@ -4,7 +4,18 @@ const { query } = require('./db');
 const { verifyToken } = require('./auth');
 const { fetchGitHubIdentity } = require('./lib/github-api');
 const { encrypt } = require('./lib/crypto');
-const { encryptSettings, decryptSettings, redactSettings, preserveSecrets } = require('./lib/user-settings');
+const {
+  encryptSettings, decryptSettings, redactSettings, preserveSecrets, CUSTOMER_SETTINGS_WHITELIST,
+} = require('./lib/user-settings');
+const { requireFeature, companyHasFeature } = require('./lib/company-features');
+
+// 客戶端 GET /api/settings 的 odoo_settings 只回這些鍵、PUT /api/settings 也只讓客戶寫這些鍵
+// ——白名單，不是黑名單（P3-4：閘門遇到模稜兩可一律落在「關」）。黑名單的失敗模式是「以後誰
+// 往 odoo_settings 加新欄位，預設就外洩給客戶」——加欄位的人在改別的功能，根本不會想到這裡有
+// 一道過濾，而且外洩沒有任何徵狀，客戶看到不該看的東西，我們永遠不會知道。白名單則相反：漏列
+// 的新欄位客戶看不到，這種疏漏當天就會有人來抱怨「我的欄位不見了」——同一個疏忽，白名單壞的
+// 方向是安全的方向。§8 P2 的另一個出口 GET /api/auth/me（auth.js）套用同一份常數
+// （lib/user-settings.js 的 CUSTOMER_SETTINGS_WHITELIST），避免兩處各自維護會漂移。
 
 function odooRpc(baseUrl, path, body) {
   return new Promise((resolve, reject) => {
@@ -46,7 +57,21 @@ function registerRoutes(app) {
       );
       if (!rows.length) return res.status(404).json({ error: 'User not found' });
       // 密碼不回前端，只回 *_set 旗標（見 lib/user-settings 的 redactSettings）
-      res.json({ ...rows[0], odoo_settings: redactSettings(rows[0].odoo_settings) });
+      const result = { ...rows[0], odoo_settings: redactSettings(rows[0].odoo_settings) };
+      const canSync = await companyHasFeature(req.actor && req.actor.companyId, 'odoo_sync');
+      if (!canSync) {
+        // 客戶看不到 Odoo／eService 相關鍵（規格 §8 P2）：那是我們連客戶系統用的憑證，不是他的東西。
+        // 白名單過濾，見 CUSTOMER_SETTINGS_WHITELIST 的註解。odoo_settings 可能是 null（從未存過設定）。
+        if (result.odoo_settings && typeof result.odoo_settings === 'object') {
+          const filtered = {};
+          for (const key of CUSTOMER_SETTINGS_WHITELIST) {
+            if (key in result.odoo_settings) filtered[key] = result.odoo_settings[key];
+          }
+          result.odoo_settings = filtered;
+        }
+        delete result.sync_interval;
+      }
+      res.json(result);
     } catch (err) {
       res.status(500).json({ error: err.message });
     }
@@ -55,22 +80,49 @@ function registerRoutes(app) {
   app.put('/api/settings', verifyToken, async (req, res) => {
     try {
       const { odoo_settings, sync_interval } = req.body;
-      if (sync_interval !== undefined && sync_interval < 5) {
-        return res.status(400).json({ error: 'sync_interval 最小為 5 分鐘' });
-      }
-      // 這支仍是整包覆寫（theme／saved_views 靠前端鋪回，見下方兩支端點的註解），唯獨密碼欄位
-      // 例外：GET 已不再回密碼，前端鋪不回來，故未提供者一律沿用 DB 現值（preserveSecrets）。
+      const canSync = await companyHasFeature(req.actor && req.actor.companyId, 'odoo_sync');
       let toStore = null;
-      if (odoo_settings) {
-        const { rows } = await query('SELECT odoo_settings FROM users WHERE id = $1', [req.userId]);
-        toStore = JSON.stringify(encryptSettings(preserveSecrets(odoo_settings, rows[0]?.odoo_settings)));
+      let cleanSyncInterval = sync_interval;
+
+      if (!canSync) {
+        // 客戶按的是同一顆儲存鈕：不可回 403，只能忽略 Odoo／eService 欄位、其餘照常寫入
+        // （規格 §8 P2）。sync_interval 對客戶整條不存在，一律丟棄、不驗證、不寫入。
+        cleanSyncInterval = undefined;
+        if (odoo_settings) {
+          // P3-11(b)：客戶這條路不可以整包覆寫。前端是整包來回的契約（load() 從 GET 拿、
+          // save() 整包送回，frontend-settings-theme.test.js 記錄了這個契約），而 GET 對客戶
+          // 用白名單濾掉的鍵（例如未被列入白名單的 Odoo 帳密），如果 PUT 仍整包覆寫，客戶下次
+          // 存檔時就會被前端鋪回來的空值蓋掉——客戶只是換個主題，看不到的資料就悄悄不見了，
+          // 而且沒有任何錯誤訊息。修法：從 DB 現有值出發合併，只套用白名單允許客戶寫的鍵，
+          // 其餘鍵原封不動保留。
+          const { rows } = await query('SELECT odoo_settings FROM users WHERE id = $1', [req.userId]);
+          const current = (rows[0] && rows[0].odoo_settings && typeof rows[0].odoo_settings === 'object')
+            ? rows[0].odoo_settings : {};
+          const merged = { ...current };
+          for (const key of CUSTOMER_SETTINGS_WHITELIST) {
+            if (key in odoo_settings) merged[key] = odoo_settings[key];
+          }
+          toStore = JSON.stringify(encryptSettings(preserveSecrets(merged, current)));
+        }
+      } else {
+        if (sync_interval !== undefined && sync_interval < 5) {
+          return res.status(400).json({ error: 'sync_interval 最小為 5 分鐘' });
+        }
+        // 這支仍是整包覆寫（theme／saved_views 靠前端鋪回，見下方兩支端點的註解），唯獨密碼欄位
+        // 例外：GET 已不再回密碼，前端鋪不回來，故未提供者一律沿用 DB 現值（preserveSecrets）。
+        // 內部公司與平台管理員的語意不動——「對現在平台上的人零改變」。
+        if (odoo_settings) {
+          const { rows } = await query('SELECT odoo_settings FROM users WHERE id = $1', [req.userId]);
+          toStore = JSON.stringify(encryptSettings(preserveSecrets(odoo_settings, rows[0]?.odoo_settings)));
+        }
       }
+
       await query(
         `UPDATE users SET
            odoo_settings = COALESCE($2, odoo_settings),
            sync_interval = COALESCE($3, sync_interval)
          WHERE id = $1`,
-        [req.userId, toStore, sync_interval ?? null]
+        [req.userId, toStore, cleanSyncInterval ?? null]
       );
       res.json({ ok: true });
     } catch (err) {
@@ -128,7 +180,7 @@ function registerRoutes(app) {
   });
 
   // Auto-fetch Odoo user_id — reads system URL+DB from teams_settings
-  app.post('/api/settings/verify-odoo', verifyToken, async (req, res) => {
+  app.post('/api/settings/verify-odoo', verifyToken, requireFeature('odoo_sync'), async (req, res) => {
     const { odoo_username } = req.body;
     // 密碼留空＝沿用已存的（GET 不再回密碼，使用者沒改密碼時輸入框本來就是空的，
     // 不補這條的話「只改帳號按驗證」會逼人把密碼重打一次）。
@@ -159,7 +211,7 @@ function registerRoutes(app) {
   });
 
   // Auto-fetch eService user_id — reads system URL+DB from teams_settings
-  app.post('/api/settings/verify-service', verifyToken, async (req, res) => {
+  app.post('/api/settings/verify-service', verifyToken, requireFeature('odoo_sync'), async (req, res) => {
     const { service_username } = req.body;
     let { service_password } = req.body;   // 留空＝沿用已存的，同 verify-odoo
     if (!service_password) {

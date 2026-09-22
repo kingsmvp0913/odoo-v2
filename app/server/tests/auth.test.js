@@ -134,55 +134,109 @@ test('登入成功不補寫 password_enc', async () => {
 
 // --- 自助註冊 ＋ 待審核閘門 ---
 
-// 意圖：自助註冊建 pending 帳號（role=user、approved=false），回 token 供本次精靈設定憑證用。
-// approved 唯一在此設 false——其餘建立路徑（setup/admin/直接 INSERT）預設 true，安全模型只擋自助註冊。
-test('POST /api/auth/register → 建 pending user、回 token', async () => {
+// 規格 §8 P3（Task 8，2026-09-21）：自助註冊已關閉。下面三支原本在驗「register 自己的行為」
+// （建 pending user、擋重複帳號、擋短密碼），現在 register 整支都直接 403、不再查 DB、不再驗欄位，
+// 這三支測的行為已經不存在——翻面保留（不刪），紀錄「這裡曾經是開放的、後來被刻意關掉」。
+test('POST /api/auth/register → 自助註冊已關閉，不建帳號（原本會建 pending user、回 token）', async () => {
   const res = await request(app).post('/api/auth/register').send({
     username: 'newbie', password: 'password123', display_name: '新人'
   });
-  expect(res.status).toBe(201);
-  expect(res.body.token).toBeDefined();
-  const { rows: [u] } = await dbModule.query("SELECT role, approved FROM users WHERE username='newbie'");
-  expect(u.role).toBe('user');
-  expect(u.approved).toBe(false);
+  expect(res.status).toBe(403);
+  expect(res.body.token).toBeUndefined();
+  const { rows } = await dbModule.query("SELECT 1 FROM users WHERE username='newbie'");
+  expect(rows.length).toBe(0);
 });
 
-test('POST /api/auth/register → 帳號重複 409', async () => {
+test('POST /api/auth/register → 自助註冊已關閉（原本測帳號重複回 409）', async () => {
   const res = await request(app).post('/api/auth/register').send({
     username: 'newbie', password: 'password123', display_name: '新人2'
   });
-  expect(res.status).toBe(409);
+  expect(res.status).toBe(403);
 });
 
-test('POST /api/auth/register → 密碼<8 → 400', async () => {
+test('POST /api/auth/register → 自助註冊已關閉（原本測密碼太短回 400）', async () => {
   const res = await request(app).post('/api/auth/register').send({
     username: 'shorty', password: 'abc', display_name: 'S'
   });
-  expect(res.status).toBe(400);
+  expect(res.status).toBe(403);
 });
 
-// 意圖：pending 帳號密碼對也不得登入（管理員核准前）。
+// 意圖：pending 帳號密碼對也不得登入（管理員核准前）。這支測的是 login 看到 approved=false
+// 的行為，不是在測 register——register 已關閉（Task 8），改用手動 INSERT 重現 pending 帳號
+// （形狀比照 tenant-routes-scope.test.js 的 mkUser），斷言本身沒有動。
 test('POST /api/auth/login → 未核准帳號 403 pendingApproval', async () => {
-  const res = await request(app).post('/api/auth/login').send({ username: 'newbie', password: 'password123' });
+  const bcrypt = require('bcryptjs');
+  const hash = await bcrypt.hash('password123', 4);
+  await dbModule.query(
+    "INSERT INTO users (username, password_hash, display_name, role, approved) VALUES ('newbie2', $1, '新人', 'user', false)",
+    [hash]
+  );
+  const res = await request(app).post('/api/auth/login').send({ username: 'newbie2', password: 'password123' });
   expect(res.status).toBe(403);
   expect(res.body.pendingApproval).toBe(true);
 });
 
-// 意圖：未核准閘門——pending token 只准碰 auth/settings，碰工作台 API 一律 403 pendingApproval。
-test('未核准閘門：pending token 打工作台 API → 403；打 settings → 放行（非閘門 403）', async () => {
-  // 拿 pending 帳號的 register token
-  const reg = await request(app).post('/api/auth/register').send({
-    username: 'pend2', password: 'password123', display_name: 'P2'
-  });
-  const pendToken = reg.body.token;
+// 意圖（Task 8c fix round 1）：這一關的產出物就是這句訊息文字本身——approved=false 在這條分支
+// 上只剩「被公司管理員停用」一種意思，不能再讓使用者看到暗示「審核中、等一下就會過」的舊字。
+// 釘住文字，不然下次手滑改回舊文案，行為測試（403／pendingApproval）全綠也看不出來。
+test('POST /api/auth/login → 未核准帳號的訊息講「已停用」，不再講「審核中」', async () => {
+  const bcrypt = require('bcryptjs');
+  const hash = await bcrypt.hash('password123', 4);
+  await dbModule.query(
+    "INSERT INTO users (username, password_hash, display_name, role, approved) VALUES ('newbie3', $1, '新人3', 'user', false)",
+    [hash]
+  );
+  const res = await request(app).post('/api/auth/login').send({ username: 'newbie3', password: 'password123' });
+  expect(res.body.error).toBe('此帳號已停用，請聯絡貴公司的管理員');
+});
+
+// 意圖：這支原本斷言「pending token 能放行走 settings」——那是舊行為，前提是「待審核」與
+// 「已停用」是兩個要分開處理的狀態。P3-13 裁決：這個前提不再成立（正式環境零筆待審／NULL，
+// 而且全庫唯一寫入 approved=false 的路徑 auth.js:155 在同一份計畫的 Task 8 會被關掉），
+// 之後 approved=false 只剩一種意思：被公司管理員收回存取權。所以本關在 verifyToken 補上
+// 「approved===false 一律 403」之後，這支測試斷言的行為就是刻意被推翻的舊行為，不是新缺陷
+// ——翻面保留（不刪），紀錄「這裡曾經是反過來的、後來被刻意改掉」。
+// register 已關閉（Task 8），這支測的是 verifyToken／閘門看到 approved=false 的行為，不是在測
+// register，故改用比照 tenant-routes-scope.test.js mkUser 的形狀：先建帳號、正常登入拿到
+// 合法 token，再由「公司管理員收回存取權」把 approved 改 false——這就是這個欄位現在唯一會
+// 發生的真實情境（token 早就簽出去了，之後才被收回）。斷言本身沒有動。
+test('收回存取權（approved=false）：所有路徑一律 403，包含舊閘門原本放行的 settings', async () => {
+  const bcrypt = require('bcryptjs');
+  const hash = await bcrypt.hash('password123', 4);
+  await dbModule.query(
+    "INSERT INTO users (username, password_hash, display_name, role, approved) VALUES ('pend2', $1, 'P2', 'user', true)",
+    [hash]
+  );
+  const loginRes = await request(app).post('/api/auth/login').send({ username: 'pend2', password: 'password123' });
+  const pendToken = loginRes.body.token;
+  await dbModule.query("UPDATE users SET approved = false WHERE username = 'pend2'");
 
   const blocked = await request(app).get('/api/tasks').set('Authorization', `Bearer ${pendToken}`);
   expect(blocked.status).toBe(403);
   expect(blocked.body.pendingApproval).toBe(true);
 
-  // settings 白名單：閘門放行（route 自身因缺 body 回 400，證明不是被閘門 403 擋）
+  // index.js 舊閘門的 settings 白名單現在攔不到這裡——verifyToken 自己的 approved 檢查
+  // 跑得更早，同一個 token 打 settings 一樣要被擋下來。
   const passed = await request(app).post('/api/settings/verify-odoo').set('Authorization', `Bearer ${pendToken}`).send({});
-  expect(passed.status).not.toBe(403);
+  expect(passed.status).toBe(403);
+});
+
+// 意圖（Task 8c fix round 1）：這一關的產出物就是這句訊息文字本身——被停用的人下一次打
+// 工作台 API（index.js 那道全域閘門）看到的字，要跟登入端點講同一件事，不能是舊的「審核中」。
+// 釘住文字，不然下次手滑改回舊文案，行為測試（403／pendingApproval）全綠也看不出來。
+test('未核准閘門：被停用帳號打工作台 API，訊息講「已停用」，不再講「審核中」', async () => {
+  const bcrypt = require('bcryptjs');
+  const hash = await bcrypt.hash('password123', 4);
+  await dbModule.query(
+    "INSERT INTO users (username, password_hash, display_name, role, approved) VALUES ('pend3', $1, 'P3', 'user', true)",
+    [hash]
+  );
+  const loginRes = await request(app).post('/api/auth/login').send({ username: 'pend3', password: 'password123' });
+  const pendToken = loginRes.body.token;
+  await dbModule.query("UPDATE users SET approved = false WHERE username = 'pend3'");
+
+  const blocked = await request(app).get('/api/tasks').set('Authorization', `Bearer ${pendToken}`);
+  expect(blocked.body.error).toBe('此帳號已停用，請聯絡貴公司的管理員');
 });
 
 // 意圖：已核准（admin）token 不被閘門擋。
@@ -203,13 +257,18 @@ test('GET /api/auth/me → 含 approved', async () => {
 // 他手上的舊 token 仍能打所有 API 最長 7 天——「刪除帳號」這個動作對安全性等於沒有發生。
 // 這裡刻意用「使用者自己資料範圍」的端點（/api/auth/me）驗證：它不經 admin guard，
 // 是撤銷失效時最赤裸的破口。
+// register 已關閉（Task 8），這支測的是刪除帳號後 token 撤銷的行為，不是在測 register，
+// 改用比照 mkUser 的形狀：手動 INSERT 一個已核准帳號、正常登入拿 token。
 test('刪除帳號後，該帳號既有 JWT 立即失效（401，不得放行 7 天）', async () => {
-  const reg = await request(app).post('/api/auth/register').send({
-    username: 'leaver', password: 'password123', display_name: '離職者'
-  });
-  const leaverToken = reg.body.token;
+  const bcrypt = require('bcryptjs');
+  const hash = await bcrypt.hash('password123', 4);
+  await dbModule.query(
+    "INSERT INTO users (username, password_hash, display_name, role, approved) VALUES ('leaver', $1, '離職者', 'user', true)",
+    [hash]
+  );
   const { rows: [u] } = await dbModule.query("SELECT id FROM users WHERE username='leaver'");
-  await dbModule.query('UPDATE users SET approved = true WHERE id = $1', [u.id]);
+  const loginRes = await request(app).post('/api/auth/login').send({ username: 'leaver', password: 'password123' });
+  const leaverToken = loginRes.body.token;
 
   // 刪除前：token 可用（確保後面的 401 是「被撤銷」而不是「本來就不能用」）
   const before = await request(app).get('/api/auth/me').set('Authorization', `Bearer ${leaverToken}`);
@@ -263,15 +322,15 @@ test('POST /api/auth/login：錯 4 次、對 1 次、再錯 4 次 → 沒被鎖�
   expect(rows).toEqual([{ blocked: true }]);
 });
 
-// 租戶隔離：自助註冊一律 role='user'，不能沒有公司（否則遷移跑完後 company_id 永遠 NULL，
-// 核准之後 canSeeProject 仍恆為 false）。放在檔案最後，插入內部公司不汙染前面的既有測試。
-test('POST /api/auth/register → 有內部公司時，新帳號預設掛內部公司', async () => {
-  const { rows: [co] } = await dbModule.query(
-    "INSERT INTO companies (name, is_active, is_internal) VALUES ('內部', true, true) RETURNING id"
-  );
+// 規格 §8 P3（Task 8，2026-09-21）：這支原本驗的是 register「查內部公司塞 company_id」那段
+// 暫時措施，該措施隨 Task 8 的 handler 一起拿掉了，這支測試在驗的行為已經不存在——翻面保留
+// （不刪），紀錄「這件事曾經是開放的、後來被刻意關掉」。放在檔案最後，插入內部公司不汙染
+// 前面的既有測試。
+test('POST /api/auth/register → 自助註冊已關閉（原本測有內部公司時預設掛內部公司）', async () => {
+  await dbModule.query("INSERT INTO companies (name, is_active, is_internal) VALUES ('內部', true, true)");
   const res = await request(app).post('/api/auth/register')
     .send({ username: 'tenant-reg1', password: 'password123', display_name: 'Reg1' });
-  expect(res.status).toBe(201);
-  const { rows: [u] } = await dbModule.query('SELECT company_id FROM users WHERE username = $1', ['tenant-reg1']);
-  expect(u.company_id).toBe(co.id);
+  expect(res.status).toBe(403);
+  const { rows } = await dbModule.query('SELECT 1 FROM users WHERE username = $1', ['tenant-reg1']);
+  expect(rows.length).toBe(0);
 });

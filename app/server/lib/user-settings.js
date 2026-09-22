@@ -16,6 +16,13 @@ const { encrypt, decrypt } = require('./crypto');
 // 只有這兩個是祕密；其餘（url／db／username／user_id／theme／saved_views）維持明文
 const SECRET_KEYS = ['odoo_password', 'service_password'];
 
+// 客戶看不到 Odoo／eService 相關鍵（規格 §8 P2）：那是我們用來連客戶系統的憑證，不是他的東西。
+// 白名單，不是黑名單——黑名單漏列新欄位會讓客戶預設看得到，且外洩沒有任何徵狀。
+// settings.js（GET/PUT /api/settings）與 auth.js（GET /api/auth/me）都整包回這個欄位，兩處
+// 各自維護一份會漂移，漂移就是靜默外洩，所以抽成這裡唯一一份共用常數。
+// teams_user_id 是 MS Teams 提及通知用的 id（非 Odoo／eService 憑證），沒有藏的理由，故列入。
+const CUSTOMER_SETTINGS_WHITELIST = ['theme', 'saved_views', 'teams_user_id'];
+
 // 以「decrypt 成功」判定是否已加密，而不是比對 `a:b:c` 字面格式——密碼本身可能剛好含兩個冒號。
 // AES-GCM 帶驗證標籤，解錯必然 throw，判斷是可靠的。
 function isEncrypted(value) {
@@ -89,4 +96,7 @@ function preserveSecrets(incoming, current) {
   return out;
 }
 
-module.exports = { encryptSettings, decryptSettings, redactSettings, preserveSecrets, isEncrypted, SECRET_KEYS };
+module.exports = {
+  encryptSettings, decryptSettings, redactSettings, preserveSecrets, isEncrypted, SECRET_KEYS,
+  CUSTOMER_SETTINGS_WHITELIST,
+};

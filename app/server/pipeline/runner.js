@@ -96,6 +96,44 @@ function abortTask(taskId) {
   if (entry) entry.ctrl.abort();
 }
 
+// 規格 §7 第五列：公司停用或到期時，立刻中止它正在跑的 AI。
+// canRun 只擋得住下一次執行；不中止的話已經在跑的那一輪會跑完，平台繼續替停繳的客戶燒錢。
+// 用「建任務的人所屬公司」判斷，與 cron 那一關同一條規則——一個專案可以綁多家公司，
+// 所以不能用專案判斷。
+// 狀態刻意不動：全平台的中止語意就是「原地不動、不寫失敗、不列 blocker」，
+// 只補一行時間軸讓人看得懂為什麼停了。
+async function abortCompanyTasks(companyId) {
+  const inflight = getInflightInfo();
+  if (!inflight.length || !companyId) return [];
+  const userIds = [...new Set(inflight.map(e => e.userId).filter(Boolean))];
+  if (!userIds.length) return [];
+  // 原規劃用 id = ANY($2::int[])，但實測 pg-mem 對 SERIAL PRIMARY KEY 欄位配 ANY(int[])
+  // 一律回 0 列（最小重現：CREATE TABLE t (id SERIAL PRIMARY KEY, ...) 之後 ANY 永遠不中）。
+  // 改用 IN 搭配逐一參數化佔位符，不把 userId 串進 SQL 字串。
+  const placeholders = userIds.map((_, i) => `$${i + 2}`).join(',');
+  const { rows } = await query(
+    `SELECT id FROM users WHERE company_id = $1 AND id IN (${placeholders})`,
+    [companyId, ...userIds]
+  );
+  const mine = new Set(rows.map(r => r.id));
+  const aborted = [];
+  for (const e of inflight) {
+    if (!mine.has(e.userId)) continue;
+    abortTask(e.taskId);
+    await query(
+      "INSERT INTO task_logs (task_id, role, content) VALUES ($1, 'ai', $2)",
+      [e.taskId, '公司帳號已停用或到期，本輪執行已中止。改到一半的程式碼留在任務分支，沒有合併。']
+    );
+    aborted.push(e.taskId);
+  }
+  return aborted;
+}
+
+// 測試用：直接塞一筆在飛紀錄。正式程式碼不要呼叫。
+function _setInflightForTesting(taskId, entry) {
+  _inFlight.set(Number(taskId), entry);
+}
+
 function getInflightTaskIds() {
   return [..._inFlight.keys()];
 }
@@ -611,6 +649,11 @@ async function runPipeline(userId, { auto = false } = {}) {
       if (_inFlight.size >= MAX_GLOBAL) break;   // 全機滿載，本輪停止派工（即時，跨 user 併發共用）
       if (_inFlight.has(task.id)) continue;      // 已在飛，不重複派
       if (await mergeGateBlocked(task)) continue; // (B) 同專案尾巴已被佔／有更早進場者 → 留待下一輪
+      // 公司停用或到期之後，cron 不該繼續替那家客戶推進任務（規格 §7）。
+      // 依「建任務的人」所屬公司判斷，與「誰付錢」同一個人——一個專案可以掛多家公司，
+      // 所以不能用專案判斷。
+      const { isUserCompanyUsable } = require('../lib/tenant-access');
+      if (!await isUserCompanyUsable(task.user_id)) continue;
       if (dispatchTask(task, settings)) dispatched++;
     }
     return { dispatched };
@@ -621,4 +664,4 @@ async function runPipeline(userId, { auto = false } = {}) {
 
 // RUNNABLE_STATUSES 一併匯出：stations.test.js 用它斷言「每個合法回程站都真的有 handler 跑得動」。
 // 不匯出就只能在測試裡抄一份清單，日後新增站時那份抄本不會更新＝防線失效。
-module.exports = { runPipeline, abortTask, getInflightTaskIds, getInflightInfo, whenIdle, RUNNABLE_STATUSES, writeAnalysisYaml };
+module.exports = { runPipeline, abortTask, abortCompanyTasks, getInflightTaskIds, getInflightInfo, whenIdle, RUNNABLE_STATUSES, writeAnalysisYaml, _setInflightForTesting };

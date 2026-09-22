@@ -16,6 +16,7 @@ const fs = require('fs');
 const crypto = require('crypto');
 const { query } = require('./db');
 const { verifyToken } = require('./auth');
+const { requireFeature, companyHasFeature } = require('./lib/company-features');
 const { uploadRoot, readAttachmentFile } = require('./lib/attachments');
 const { decodeImage, sniffImage, readUploadToken, peekUploadToken, issueUploadToken,
   isLocal, saveImage, validateItem } = require('./lib/exam/upload');
@@ -51,7 +52,7 @@ const shotUpload = multer({
  * 只認 X-Token header 與 ?token=，**不吃 req.body.token**——body 要等 multer／
  * express.json 解析完才有，那時已經太晚了。
  */
-function checkExamToken(req, res, next) {
+async function checkExamToken(req, res, next) {
   // 本機來的免 token：從 127.0.0.1 開儀表板的就是這台機器自己。
   // 判斷一律用 socket.remoteAddress，絕不可看 header（同網段誰都偽造得出來）。
   if (isLocal(req)) return next();
@@ -64,7 +65,15 @@ function checkExamToken(req, res, next) {
   const auth = req.headers && req.headers.authorization;
   if (auth && auth.startsWith('Bearer ')) {
     try {
-      require('jsonwebtoken').verify(auth.slice(7), process.env.JWT_SECRET);
+      const payload = require('jsonwebtoken').verify(auth.slice(7), process.env.JWT_SECRET);
+      // 為什麼只補這一條路：
+      //   本機請求＝這台主機上的截圖工具，不是客戶進得來的路；
+      //   共用 X-Token 只能從 POST /api/exam/upload-token 拿，而那一支已經掛上 requireFeature，
+      //   所以沒開考試功能的公司根本拿不到 token，不必在這裡重複擋。
+      const { rows: fr } = await query('SELECT company_id FROM users WHERE id = $1', [payload.userId]);
+      if (!(await companyHasFeature(fr[0] ? fr[0].company_id : null, 'exam'))) {
+        return res.status(404).json({ error: '找不到這個功能' });
+      }
       return next();
     } catch { /* 壞 token 不放行，往下走 X-Token 那條 */ }
   }
@@ -174,6 +183,10 @@ const asTest = v => ['1', 'true', 'yes', 'on'].includes(String(v ?? '').toLowerC
 
 // 同一題庫只留一支 drain。POST 發生在既有 job 執行期間時，該 job 的 snapshot 不會
 // 吃到新列，所以跑完後必須再看一次 pending，直到真正清空為止。
+// ⚠ 已知限制：這個閘門只擋得住「新的排入」。已經在跑的判題走 lib/exam/review.js 自己的
+// spawn('claude')（review.js:402），不接 AbortController、不進 _inFlight、不進通行證表，
+// 唯一會讓它停的是它自己的逾時計時器。所以公司被停用或功能被關掉時，正在跑的那一輪會跑完。
+// 要真的能中止，得先讓 review.js 走平台的 runClaude 通道——不在第 3 部 a 的範圍。
 const scheduled = new Map();
 function scheduleQueue(bankId) {
   const active = scheduled.get(bankId);
@@ -218,14 +231,14 @@ function answerValue(value, { required = false } = {}) {
 function registerRoutes(app) {
   // 通行碼的查詢與重產。**走 verifyToken，不走 checkExamToken**——拿舊碼換新碼
   // 等於永不過期，3 小時效期就白設了。要新的一律得有平台帳號。
-  app.get('/api/exam/upload-token', verifyToken, (req, res) => {
+  app.get('/api/exam/upload-token', verifyToken, requireFeature('exam'), (req, res) => {
     const t = peekUploadToken(dataDir());
     if (!t) return res.json({ exists: false });
     // 過期的不吐值：貼出去也用不了，只會讓人以為還能用
     res.json({ exists: true, expired: t.expired, expires_at: t.expiresAt, token: t.expired ? null : t.token });
   });
 
-  app.post('/api/exam/upload-token', verifyToken, (req, res) => {
+  app.post('/api/exam/upload-token', verifyToken, requireFeature('exam'), (req, res) => {
     const t = issueUploadToken(dataDir());
     res.json({ token: t.token, expires_at: t.expiresAt });
   });
@@ -320,7 +333,7 @@ function registerRoutes(app) {
   //
   // 同一個題庫只允許一個工作在跑；第二個回 409 而且**要講得出在跑什麼、
   // 多久、進度到哪**——只說「還在跑」等於沒說（原專案實測的使用者回饋）。
-  app.post('/api/exam/run', verifyToken, express.json(), async (req, res) => {
+  app.post('/api/exam/run', verifyToken, requireFeature('exam'), express.json(), async (req, res) => {
     const bankId = parseInt(req.body.bank, 10);
     if (!Number.isInteger(bankId)) return res.status(400).json({ error: '缺少 bank' });
 
@@ -355,7 +368,7 @@ function registerRoutes(app) {
   // 只翻旗標，不去砍正在跑的那一頁：中途砍會留下一批沒有判斷的孤兒作答（畫面上
   // 永遠顯示等待中），要走跟失敗路徑一樣的清理。排隊的頁留在 pending 原地不動，
   // 取消暫停後接上去繼續，不必重傳。
-  app.post('/api/exam/banks/:id/pause', verifyToken, express.json(), async (req, res) => {
+  app.post('/api/exam/banks/:id/pause', verifyToken, requireFeature('exam'), express.json(), async (req, res) => {
     const bankId = parseInt(req.params.id, 10);
     if (!Number.isInteger(bankId)) return res.status(400).json({ error: '缺少 bank' });
     const paused = !!req.body.paused;
@@ -374,7 +387,7 @@ function registerRoutes(app) {
 
   // 工作歷程。進度的真相在這裡，socket 廣播只是讓開著頁面的人即時看到——
   // 廣播錯過了就沒了，重整一次前端記憶體就空的。
-  app.get('/api/exam/jobs', verifyToken, async (req, res) => {
+  app.get('/api/exam/jobs', verifyToken, requireFeature('exam'), async (req, res) => {
     const bankId = parseInt(req.query.bank, 10);
     const params = [], where = [];
     if (Number.isInteger(bankId)) { params.push(bankId); where.push(`bank_id = $${params.length}`); }
@@ -386,7 +399,7 @@ function registerRoutes(app) {
   });
 
   // 佇列現況。這支給平台使用者看，所以用 JWT 而不是 X-Token。
-  app.get('/api/exam/uploads', verifyToken, async (req, res) => {
+  app.get('/api/exam/uploads', verifyToken, requireFeature('exam'), async (req, res) => {
     const bankId = parseInt(req.query.bank, 10);
     const params = [], where = [];
     if (Number.isInteger(bankId)) { params.push(bankId); where.push(`bank_id = $${params.length}`); }
@@ -400,7 +413,7 @@ function registerRoutes(app) {
   });
 
   // 考試工作台一次取得上傳與逐題結果。官方答案優先；沒有官方答案才使用最新 adversary。
-  app.get('/api/exam/dashboard', verifyToken, async (req, res) => {
+  app.get('/api/exam/dashboard', verifyToken, requireFeature('exam'), async (req, res) => {
     const bankId = parseInt(req.query.bank, 10);
     if (!Number.isInteger(bankId)) return res.status(400).json({ error: '缺少 bank' });
     const bank = (await query(
@@ -505,7 +518,7 @@ function registerRoutes(app) {
   //
   // 一定要先清掉那一頁已建的作答：attempts 建在審查之前，中途失敗會留下一批沒有
   // verdict 的孤兒，不清就重跑等於再建一份重複的（實測踩過，8 題的頁變成 16 筆）。
-  app.post('/api/exam/uploads/:id/retry', verifyToken, express.json(), async (req, res) => {
+  app.post('/api/exam/uploads/:id/retry', verifyToken, requireFeature('exam'), express.json(), async (req, res) => {
     try {
       const id = parseInt(req.params.id, 10);
       if (!Number.isInteger(id)) return res.status(400).json({ error: 'id 不合法' });
@@ -529,7 +542,7 @@ function registerRoutes(app) {
   //
   // 官方確認過的題不給改：它的答案是硬事實，標它「大概率錯」只會讓考試當下看到
   // 兩個互相矛盾的訊號。
-  app.patch('/api/exam/items/:id/history-wrong', verifyToken, express.json(), async (req, res) => {
+  app.patch('/api/exam/items/:id/history-wrong', verifyToken, requireFeature('exam'), express.json(), async (req, res) => {
     try {
       const id = parseInt(req.params.id, 10);
       if (!Number.isInteger(id)) return res.status(400).json({ error: 'id 不合法' });
@@ -548,7 +561,7 @@ function registerRoutes(app) {
   });
 
   // 歸檔前的現況：每一頁的章節名、題數、已作答數。畫面靠這支列出可勾選的區塊。
-  app.get('/api/exam/banks/:id/archive', verifyToken, async (req, res) => {
+  app.get('/api/exam/banks/:id/archive', verifyToken, requireFeature('exam'), async (req, res) => {
     try {
       const bankId = parseInt(req.params.id, 10);
       if (!Number.isInteger(bankId)) return res.status(400).json({ error: 'id 不合法' });
@@ -566,7 +579,7 @@ function registerRoutes(app) {
   //
   // **圖要留著**：推導出來的每一個結論最終都源自它，之後想確認「這章到底錯幾題」
   // 只能回頭看原圖。存進這一場的上傳目錄，路徑寫在 exam_banks.score_image。
-  app.post('/api/exam/banks/:id/read-sections', verifyToken,
+  app.post('/api/exam/banks/:id/read-sections', verifyToken, requireFeature('exam'),
     shotUpload.single('screenshot'), async (req, res) => {
       try {
         const bankId = parseInt(req.params.id, 10);
@@ -628,7 +641,7 @@ function registerRoutes(app) {
   //
   // 只認 DB 裡登記過的路徑（先查出 image_path 再讀檔），**絕不吃使用者給的路徑**
   // ——直接把 query 參數接到 uploadRoot 後面就是路徑穿越。
-  app.get('/api/exam/shot/:kind/:id', verifyToken, async (req, res) => {
+  app.get('/api/exam/shot/:kind/:id', verifyToken, requireFeature('exam'), async (req, res) => {
     try {
       const id = parseInt(req.params.id, 10);
       if (!Number.isInteger(id)) return res.status(404).end();
@@ -654,7 +667,7 @@ function registerRoutes(app) {
   //
   // **0 題錯那一步不可逆**（certain 取 OR，蓋不掉），所以跳過與衝突一律具名回傳給
   // 畫面顯示，不做「靜靜成功」。
-  app.post('/api/exam/banks/:id/archive', verifyToken, express.json(), async (req, res) => {
+  app.post('/api/exam/banks/:id/archive', verifyToken, requireFeature('exam'), express.json(), async (req, res) => {
     try {
       const bankId = parseInt(req.params.id, 10);
       if (!Number.isInteger(bankId)) return res.status(400).json({ error: 'id 不合法' });
@@ -682,7 +695,7 @@ function registerRoutes(app) {
   //
   // 有工作在跑時拒絕：worker 正在對這些列寫入，中途抽掉會讓它撞 FK 而整批 failed，
   // 而畫面上只看得到「失敗」查不出原因。
-  app.delete('/api/exam/banks/:id/attempts', verifyToken, async (req, res) => {
+  app.delete('/api/exam/banks/:id/attempts', verifyToken, requireFeature('exam'), async (req, res) => {
     try {
       const bankId = parseInt(req.params.id, 10);
       if (!Number.isInteger(bankId)) return res.status(400).json({ error: 'id 不合法' });
@@ -716,7 +729,7 @@ function registerRoutes(app) {
     } catch (e) { res.status(500).json({ error: e.message }); }
   });
 
-  app.post('/api/exam/attempts/:id/vote', verifyToken, express.json(), async (req, res) => {
+  app.post('/api/exam/attempts/:id/vote', verifyToken, requireFeature('exam'), express.json(), async (req, res) => {
     try {
       const attemptId = parseInt(req.params.id, 10);
       if (!Number.isInteger(attemptId)) return res.status(400).json({ error: 'id 不合法' });
@@ -741,7 +754,7 @@ function registerRoutes(app) {
     } catch (e) { res.status(400).json({ error: e.message }); }
   });
 
-  app.patch('/api/exam/attempts/:id/final', verifyToken, express.json(), async (req, res) => {
+  app.patch('/api/exam/attempts/:id/final', verifyToken, requireFeature('exam'), express.json(), async (req, res) => {
     // 正式答案是歸檔時對成績單、鎖成官方答案的那一份，歸檔不可逆——只給管理員改，
     // 其他人表達意見走投票。前端藏勾勾擋不住直接打 API。
     if (!req.isAdmin) return res.status(403).json({ error: '只有管理員能改正式答案，其他人請用投票' });

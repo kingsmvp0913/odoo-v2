@@ -34,8 +34,13 @@ beforeAll(async () => {
   ({ rows: [{ id: adminId }] } = await dbModule.query("SELECT id FROM users WHERE username='admin1'"));
 
   // 第二位使用者＝一般（用來驗證 admin-gate 與跨使用者顯示）
+  // 租戶隔離（Task 7）：POST /api/admin/users 建一般使用者現在強制要帶 company_id，
+  // 先建一家公司給這個 fixture 帳號掛。
+  const { rows: [co] } = await dbModule.query(
+    "INSERT INTO companies (name, is_active) VALUES ('測試公司', true) RETURNING id"
+  );
   await request(app).post('/api/admin/users').set('Authorization', `Bearer ${adminToken}`)
-    .send({ username: 'bob', password: 'pass1234', display_name: 'Bob', role: 'user' });
+    .send({ username: 'bob', password: 'pass1234', display_name: 'Bob', role: 'user', company_id: co.id });
   const login = await request(app).post('/api/auth/login').send({ username: 'bob', password: 'pass1234' });
   userToken = login.body.token;
   ({ rows: [{ id: userId }] } = await dbModule.query("SELECT id FROM users WHERE username='bob'"));

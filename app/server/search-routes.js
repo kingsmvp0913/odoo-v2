@@ -1,5 +1,6 @@
 const { query } = require('./db');
 const { verifyToken } = require('./auth');
+const { hasCompany } = require('./lib/tenant-access');
 
 // 每一類各回幾筆。側欄 palette 是「快速跳過去」的入口不是清單頁，
 // 三類加起來超過一個螢幕高度就失去挑選的意義。
@@ -34,7 +35,8 @@ function registerRoutes(app) {
       const like = toLikePattern(q);
 
       // 任務與對話都只查自己的（比照 /api/tasks 與 /api/projects/:id/chats 的預設授權）。
-      // 專案不設限：此 repo 沒有 project_members 表，專案共享是既有設計。
+      // 專案原本不帶任何範圍條件：客戶打一個字就列得出全平台客戶的專案名。
+      // 平台管理員看全部；一般使用者只看自己公司綁的（規格 §3.2、§5.2 canSeeProject 同一套邊界）。
       const [taskTitle, taskBody, chatTitle, chatBody, projects] = await Promise.all([
         query(
           `SELECT t.id, t.task_id, t.title, t.status, t.project_id, p.name AS project_name
@@ -68,12 +70,20 @@ function registerRoutes(app) {
             ORDER BY c.created_at DESC LIMIT ${PER_KIND * 5}`,
           [req.userId, like]
         ),
-        query(
-          `SELECT id, name FROM projects
-            WHERE LOWER(name) LIKE $1 OR LOWER(COALESCE(description, '')) LIKE $1
-            ORDER BY name LIMIT ${PER_KIND}`,
-          [like]
-        ),
+        req.actor.isPlatformAdmin
+          ? query(
+              `SELECT id, name FROM projects
+                WHERE LOWER(name) LIKE $1 OR LOWER(COALESCE(description, '')) LIKE $1
+                ORDER BY name LIMIT ${PER_KIND}`,
+              [like]
+            )
+          : query(
+              `SELECT p.id, p.name FROM projects p
+                 JOIN project_companies pc ON pc.project_id = p.id AND pc.company_id = $2
+                WHERE LOWER(p.name) LIKE $1 OR LOWER(COALESCE(p.description, '')) LIKE $1
+                ORDER BY p.name LIMIT ${PER_KIND}`,
+              [like, hasCompany(req.actor.companyId) ? req.actor.companyId : null]
+            ),
       ]);
 
       res.json({

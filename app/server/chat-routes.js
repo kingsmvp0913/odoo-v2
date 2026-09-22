@@ -1,6 +1,7 @@
 const { query } = require('./db');
 const { verifyToken } = require('./auth');
 const { emitToUser } = require('./notify');
+const { loadProjectForActor } = require('./lib/tenant-access');
 const {
   saveChatAttachmentFile, deleteChatDir, readAttachmentFile, sniffFile, uploadChatFiles, resolveChatFile
 } = require('./lib/attachments');
@@ -79,6 +80,11 @@ function registerRoutes(app) {
   // Uses LEFT JOIN instead of correlated subquery for pg-mem compatibility.
   app.get('/api/projects/:projectId/chats', verifyToken, async (req, res) => {
     try {
+      // 對話會把 AI 接到這個專案的 repo 與資料庫連線上，所以進來之前先驗看不看得到這個專案。
+      // 既有的 getOwnedChat 只驗「這場對話是不是本人的」，驗不到專案這一層（規格 §5.3）。
+      if (!await loadProjectForActor(req.params.projectId, req, 'id')) {
+        return res.status(404).json({ error: '找不到專案' });
+      }
       const { rows } = await query(
         // chat_session_id 一併吐出：那是 claude CLI 的 session，排障時可用 `claude --resume <id>`
         // 直接接上該場對話，看 AI 實際查了什麼（回覆文字只留結論，工具呼叫過程只存在 session 裡）。
@@ -105,6 +111,11 @@ function registerRoutes(app) {
 
   app.post('/api/projects/:projectId/chats', verifyToken, async (req, res) => {
     try {
+      // 對話會把 AI 接到這個專案的 repo 與資料庫連線上，所以進來之前先驗看不看得到這個專案。
+      // 既有的 getOwnedChat 只驗「這場對話是不是本人的」，驗不到專案這一層（規格 §5.3）。
+      if (!await loadProjectForActor(req.params.projectId, req, 'id')) {
+        return res.status(404).json({ error: '找不到專案' });
+      }
       const title = (req.body.title || '').trim() || '新對話';
       // 白名單而非照收：這個值會被組進 agent 的 prompt，任意字串等於讓呼叫端寫 prompt。
       // 認不得就當成沒選（agent 照原本判準自己挑來源）。
@@ -129,6 +140,11 @@ function registerRoutes(app) {
   // 授權比照 delete：只能改自己的對話。
   app.put('/api/projects/:projectId/chats/:id', verifyToken, async (req, res) => {
     try {
+      // 對話會把 AI 接到這個專案的 repo 與資料庫連線上，所以進來之前先驗看不看得到這個專案。
+      // 既有的 getOwnedChat 只驗「這場對話是不是本人的」，驗不到專案這一層（規格 §5.3）。
+      if (!await loadProjectForActor(req.params.projectId, req, 'id')) {
+        return res.status(404).json({ error: '找不到專案' });
+      }
       const title = (req.body.title || '').trim();
       // 空白不回退成「新對話」：那是建立時的預設值，改名改成空白是使用者失誤，要擋。
       if (!title) return res.status(400).json({ error: '標題不可空白' });
@@ -143,6 +159,11 @@ function registerRoutes(app) {
 
   app.delete('/api/projects/:projectId/chats/:id', verifyToken, async (req, res) => {
     try {
+      // 對話會把 AI 接到這個專案的 repo 與資料庫連線上，所以進來之前先驗看不看得到這個專案。
+      // 既有的 getOwnedChat 只驗「這場對話是不是本人的」，驗不到專案這一層（規格 §5.3）。
+      if (!await loadProjectForActor(req.params.projectId, req, 'id')) {
+        return res.status(404).json({ error: '找不到專案' });
+      }
       const { rowCount } = await query(
         'DELETE FROM project_chats WHERE id = $1 AND project_id = $2 AND user_id = $3',
         [req.params.id, req.params.projectId, req.userId]
@@ -155,6 +176,11 @@ function registerRoutes(app) {
 
   app.get('/api/projects/:projectId/chats/:id/messages', verifyToken, async (req, res) => {
     try {
+      // 對話會把 AI 接到這個專案的 repo 與資料庫連線上，所以進來之前先驗看不看得到這個專案。
+      // 既有的 getOwnedChat 只驗「這場對話是不是本人的」，驗不到專案這一層（規格 §5.3）。
+      if (!await loadProjectForActor(req.params.projectId, req, 'id')) {
+        return res.status(404).json({ error: '找不到專案' });
+      }
       const chat = await getOwnedChat(req.params.id, req.params.projectId, req.userId);
       if (!chat) return res.status(404).json({ error: 'Not found' });
       const { rows } = await query(
@@ -175,6 +201,11 @@ function registerRoutes(app) {
   // uploadChatFiles：multer 遇非 multipart 直接放行、req.files 為空，既有純 JSON 呼叫零影響。
   app.post('/api/projects/:projectId/chats/:id/messages', verifyToken, uploadChatFiles, async (req, res) => {
     try {
+      // 對話會把 AI 接到這個專案的 repo 與資料庫連線上，所以進來之前先驗看不看得到這個專案。
+      // 既有的 getOwnedChat 只驗「這場對話是不是本人的」，驗不到專案這一層（規格 §5.3）。
+      if (!await loadProjectForActor(req.params.projectId, req, 'id')) {
+        return res.status(404).json({ error: '找不到專案' });
+      }
       const content = (req.body.content || '').trim();
       const files = req.files || [];
       // 只貼一張截圖不打字是對話裡很自然的行為，所以檔案也算內容；兩者皆空才是空訊息。
@@ -245,6 +276,11 @@ function registerRoutes(app) {
   // finally 清掉 reply_pending，所以這裡不需要（也不該）自己動那兩件事。
   app.post('/api/projects/:projectId/chats/:id/stop', verifyToken, async (req, res) => {
     try {
+      // 對話會把 AI 接到這個專案的 repo 與資料庫連線上，所以進來之前先驗看不看得到這個專案。
+      // 既有的 getOwnedChat 只驗「這場對話是不是本人的」，驗不到專案這一層（規格 §5.3）。
+      if (!await loadProjectForActor(req.params.projectId, req, 'id')) {
+        return res.status(404).json({ error: '找不到專案' });
+      }
       const chat = await getOwnedChat(req.params.id, req.params.projectId, req.userId);
       if (!chat) return res.status(404).json({ error: 'Not found' });
       const ctrl = _replyAborts.get(String(req.params.id));
@@ -258,6 +294,11 @@ function registerRoutes(app) {
   // header，瀏覽器原生載圖不會帶上，只會拿到 401；前端是 fetch 成 blob 再轉 objectURL。
   app.get('/api/projects/:projectId/chats/:id/attachments/:attId/download', verifyToken, async (req, res) => {
     try {
+      // 對話會把 AI 接到這個專案的 repo 與資料庫連線上，所以進來之前先驗看不看得到這個專案。
+      // 既有的 getOwnedChat 只驗「這場對話是不是本人的」，驗不到專案這一層（規格 §5.3）。
+      if (!await loadProjectForActor(req.params.projectId, req, 'id')) {
+        return res.status(404).json({ error: '找不到專案' });
+      }
       const chat = await getOwnedChat(req.params.id, req.params.projectId, req.userId);
       if (!chat) return res.status(404).json({ error: 'Not found' });
       const { rows } = await query(
@@ -282,6 +323,11 @@ function registerRoutes(app) {
   // 把整串排障對話摘要成任務草稿（不建任務）——前端拿去讓使用者編輯確認後才走 POST /api/tasks
   app.post('/api/projects/:projectId/chats/:id/draft-task', verifyToken, async (req, res) => {
     try {
+      // 對話會把 AI 接到這個專案的 repo 與資料庫連線上，所以進來之前先驗看不看得到這個專案。
+      // 既有的 getOwnedChat 只驗「這場對話是不是本人的」，驗不到專案這一層（規格 §5.3）。
+      if (!await loadProjectForActor(req.params.projectId, req, 'id')) {
+        return res.status(404).json({ error: '找不到專案' });
+      }
       const chat = await getOwnedChat(req.params.id, req.params.projectId, req.userId);
       if (!chat) return res.status(404).json({ error: 'Not found' });
       const { draftTaskFromChat } = require('./pipeline/chat-to-task');
@@ -294,6 +340,11 @@ function registerRoutes(app) {
 
   app.post('/api/projects/:projectId/chats/:id/read', verifyToken, async (req, res) => {
     try {
+      // 對話會把 AI 接到這個專案的 repo 與資料庫連線上，所以進來之前先驗看不看得到這個專案。
+      // 既有的 getOwnedChat 只驗「這場對話是不是本人的」，驗不到專案這一層（規格 §5.3）。
+      if (!await loadProjectForActor(req.params.projectId, req, 'id')) {
+        return res.status(404).json({ error: '找不到專案' });
+      }
       const chat = await getOwnedChat(req.params.id, req.params.projectId, req.userId);
       if (!chat) return res.status(404).json({ error: 'Not found' });
       await query(

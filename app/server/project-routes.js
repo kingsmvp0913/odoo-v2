@@ -11,6 +11,7 @@ const { ensureTestingBranch, ensureMainBranch, pullBranch, ensureAiBranch, syncM
 const { withProjectLock } = require('./pipeline/project-lock');
 const { buildGitEnv } = require('./lib/git-identity');
 const { deleteTaskDir, deleteChatDir } = require('./lib/attachments');
+const { loadProjectForActor, canReleaseProject, requirePlatformAdmin } = require('./lib/tenant-access');
 
 const REPOS_BASE = process.env.REPOS_BASE_DIR || path.resolve(__dirname, '..', '..', 'repos');
 
@@ -18,6 +19,11 @@ const REPOS_BASE = process.env.REPOS_BASE_DIR || path.resolve(__dirname, '..', '
 // （VPN 憑證密文），這些路由給一般已登入使用者，密文外流一樣是機密外洩。VPN 狀態改走專屬的
 // GET /api/projects/:id/vpn（只回 has_config/vpn_username），這裡完全不帶三個 vpn_* 欄位。
 const PROJECT_PUBLIC_COLS = 'id, name, odoo_version, description, created_at, updated_at, folder_name, port, odoo_project_name, service_respondent_name, service_contact_name, e2e_disabled, edition, auto_deploy_enabled';
+// ⚠ GET /api/projects 用 `PROJECT_PUBLIC_COLS.replace('created_at', 'p.created_at')` 把裸欄位
+// 改成帶別名——這是「第一個出現的字串」取代，現在正確只因為 project_companies 剛好只跟 projects
+// 撞名 created_at 這一個欄位。以後在這裡加欄位，若新欄位跟 project_companies（或其他被 JOIN 進來
+// 的表）同名，這個 .replace() 只會換掉「第一個出現的那個」，另一個同名欄位會漏改、留下裸欄位造成
+// ambiguous column 或改錯目標——加欄位時務必回頭檢查那個呼叫點。
 
 // folder_name 同時決定三個外部識別：測試容器名 odoo-test-<folder>、環境目錄 odoo-envs/<folder>、
 // 測試資料庫 test_<folder>。容器名只吃 [a-zA-Z0-9_.-]，過去這裡不驗格式，填中文會被靜默清成一串
@@ -339,7 +345,27 @@ function registerRoutes(app) {
 
   app.get('/api/projects', verifyToken, async (req, res) => {
     try {
-      const { rows: projects } = await query(`SELECT ${PROJECT_PUBLIC_COLS} FROM projects ORDER BY name ASC`);
+      // 租戶範圍（規格 §5.2）：平台管理員看全部；其他人只看自己公司綁到的專案。
+      // 在 SQL 裡 JOIN 過濾，不要撈全部再用 JS 篩——後者在專案變多時是 N 筆傳輸，
+      // 而且「忘記篩」的失敗方式是靜默外洩。
+      // 內部公司刻意不特判：它看得到全部是因為遷移把全部綁給它了。
+      // PROJECT_PUBLIC_COLS 是不帶別名的裸欄位清單，project_companies 也有 created_at，
+      // JOIN 之後裸列會 ambiguous column——只在這個呼叫點補上 p. 別名，常數本身不動
+      // （其餘呼叫點沒有 JOIN，加別名反而會查不到欄位）。
+      const scopedCols = PROJECT_PUBLIC_COLS.replace('created_at', 'p.created_at');
+      // can_release（側欄「上正式」按鈕要靠它算 v-if，見 UiNextApp.js）：JOIN 本來就在，
+      // 順手多帶 pc.can_release 出來，不要逐筆 await canReleaseProject——17 個專案就是 17 次
+      // 額外查詢。判準要跟 canReleaseProject（lib/tenant-access.js）完全一致：平台管理員必過；
+      // 其餘要「是公司管理員」且「這個專案對這家公司的綁定勾了 can_release」才算，兩者缺一都是
+      // false。平台管理員這條路沒有 JOIN，pc.can_release 撈不到，在下面組回應時另外補 true。
+      const { rows: projects } = req.actor.isPlatformAdmin
+        ? await query(`SELECT ${PROJECT_PUBLIC_COLS} FROM projects ORDER BY name ASC`)
+        : await query(
+            `SELECT ${scopedCols}, pc.can_release FROM projects p
+               JOIN project_companies pc ON pc.project_id = p.id AND pc.company_id = $1
+              ORDER BY p.name ASC`,
+            [req.actor.companyId]
+          );
       const { rows: counts } = await query('SELECT project_id, COUNT(*) AS cnt FROM project_repos GROUP BY project_id');
       const countMap = {};
       for (const c of counts) countMap[String(c.project_id)] = Number(c.cnt);
@@ -363,6 +389,9 @@ function registerRoutes(app) {
       const favSet = new Set(favRows.map(f => f.project_id));
       res.json(projects.map(p => ({
         ...p,
+        // 平台管理員一律 true（見上方註解）；否則沿用 pc.can_release，但一般使用者即使綁定
+        // 有勾也不算——那顆勾是公司管理員的權限，不是全公司的（規格 §4.3）。
+        can_release: req.actor.isPlatformAdmin || (req.actor.isCompanyAdmin && p.can_release === true),
         repo_count: countMap[String(p.id)] || 0,
         unread_count: unreadMap[String(p.id)] || 0,
         has_wiki: (wikiMap[String(p.id)] || 0) > 0,
@@ -374,6 +403,10 @@ function registerRoutes(app) {
   // 我的最愛（per-user）：收藏／取消收藏。只動自己的 (user_id=req.userId)，故不需 admin 檢查（見 always.md rule 92）。
   app.post('/api/projects/:id/favorite', verifyToken, async (req, res) => {
     try {
+      // 看不到就當它不存在（規格 §5.2）——回 403 等於告訴對方「這個 id 存在，只是你不能看」
+      if (!await loadProjectForActor(req.params.id, req, 'id')) {
+        return res.status(404).json({ error: '找不到專案' });
+      }
       await query(
         'INSERT INTO project_favorites (user_id, project_id) VALUES ($1, $2) ON CONFLICT (user_id, project_id) DO NOTHING',
         [req.userId, req.params.id]
@@ -384,12 +417,16 @@ function registerRoutes(app) {
 
   app.delete('/api/projects/:id/favorite', verifyToken, async (req, res) => {
     try {
+      // 看不到就當它不存在（規格 §5.2）——回 403 等於告訴對方「這個 id 存在，只是你不能看」
+      if (!await loadProjectForActor(req.params.id, req, 'id')) {
+        return res.status(404).json({ error: '找不到專案' });
+      }
       await query('DELETE FROM project_favorites WHERE user_id = $1 AND project_id = $2', [req.userId, req.params.id]);
       res.json({ ok: true });
     } catch (err) { res.status(500).json({ error: err.message }); }
   });
 
-  app.post('/api/projects', verifyToken, async (req, res) => {
+  app.post('/api/projects', verifyToken, requirePlatformAdmin, async (req, res) => {
     try {
       const { name, odoo_version, description, folder_name, edition } = req.body;
       if (!name || !odoo_version) return res.status(400).json({ error: 'name and odoo_version required' });
@@ -434,6 +471,10 @@ function registerRoutes(app) {
 
   app.get('/api/projects/:id(\\d+)', verifyToken, async (req, res) => {
     try {
+      // 看不到就當它不存在（規格 §5.2）——回 403 等於告訴對方「這個 id 存在，只是你不能看」
+      if (!await loadProjectForActor(req.params.id, req, 'id')) {
+        return res.status(404).json({ error: '找不到專案' });
+      }
       const { rows: [project] } = await query(`SELECT ${PROJECT_PUBLIC_COLS} FROM projects WHERE id = $1`, [req.params.id]);
       if (!project) return res.status(404).json({ error: 'Not found' });
       const { rows: repos } = await query(
@@ -451,11 +492,14 @@ function registerRoutes(app) {
       const { rows: [wikiRow] } = await query(
         'SELECT COUNT(*) AS cnt FROM wiki_pages WHERE project_id = $1', [req.params.id]
       );
-      res.json({ ...project, repos, unread_count: Number(unreadRow ? unreadRow.unread : 0), has_wiki: Number(wikiRow ? wikiRow.cnt : 0) > 0 });
+      // can_release：單一專案這裡是一筆資料，沒有 N+1 疑慮，直接呼叫既有判準
+      // （lib/tenant-access.js），不要在路由裡重寫一份判斷邏輯。
+      const can_release = await canReleaseProject(req.actor, req.params.id);
+      res.json({ ...project, repos, unread_count: Number(unreadRow ? unreadRow.unread : 0), has_wiki: Number(wikiRow ? wikiRow.cnt : 0) > 0, can_release });
     } catch (err) { res.status(500).json({ error: err.message }); }
   });
 
-  app.put('/api/projects/:id', verifyToken, async (req, res) => {
+  app.put('/api/projects/:id', verifyToken, requirePlatformAdmin, async (req, res) => {
     try {
       const { name, odoo_version, description } = req.body;
       const { rows } = await query(
@@ -477,10 +521,10 @@ function registerRoutes(app) {
     } catch (err) { res.status(500).json({ error: err.message }); }
   });
 
-  // 對應設定不掛 requireAdmin：一般使用者本來就能建專案／加 repo／建環境，
-  // 唯獨這一步被擋會讓專案永遠收不到任務。刻意獨立成端點而非放寬既有 PATCH，
-  // 避免 folder_name／e2e_disabled 這些高風險欄位跟著開放。
-  app.patch('/api/projects/:id/mapping', verifyToken, async (req, res) => {
+  // 租戶隔離規格 §2：建專案／加 repo 對客戶關閉，改成平台管理員限定。
+  // （此處原本的決定是「一般使用者可建專案／加 repo，唯獨此步不擋」，
+  // 但那個前提已被規格 §2 取代——建專案本身都收回了，這裡沒有再開放的理由。）
+  app.patch('/api/projects/:id/mapping', verifyToken, requirePlatformAdmin, async (req, res) => {
     try {
       const { odoo_project_name, service_respondent_name, service_contact_name } = req.body;
       const conflicts = [];
@@ -514,7 +558,10 @@ function registerRoutes(app) {
     } catch (err) { res.status(500).json({ error: err.message }); }
   });
 
-  app.patch('/api/projects/:id', verifyToken, requireAdmin, async (req, res) => {
+  // 舊的 requireAdmin（P43 定義）與 requirePlatformAdmin 判同一件事（role==='admin'）；
+  // 沒有測試斷言這支的拒絕訊息文字（比對 deploy-routes-authz.test.js 那種），直接換成
+  // 共用的 requirePlatformAdmin，讓租戶靜態守衛（規格 §5.4）認得到「有人把關」。
+  app.patch('/api/projects/:id', verifyToken, requirePlatformAdmin, async (req, res) => {
     try {
       const { name, odoo_version, description, folder_name, odoo_project_name, service_respondent_name, e2e_disabled } = req.body;
       // 防重：來源對應名稱不可同時綁到多個專案
@@ -566,7 +613,8 @@ function registerRoutes(app) {
     } catch (err) { res.status(500).json({ error: err.message }); }
   });
 
-  app.delete('/api/projects/:id', verifyToken, requireAdmin, async (req, res) => {
+  // 同上：換成共用的 requirePlatformAdmin。
+  app.delete('/api/projects/:id', verifyToken, requirePlatformAdmin, async (req, res) => {
     try {
       // 順序是關鍵：可回滾的 DB 刪除先做完並 COMMIT，不可逆的實體刪除（測試環境、repo clone、
       // uploads 目錄）才動。反過來的話 DB 一失敗就留下「專案還在，但環境與 clone 已經消失」的
@@ -639,6 +687,10 @@ function registerRoutes(app) {
 
   app.get('/api/projects/:id/repos', verifyToken, async (req, res) => {
     try {
+      // 看不到就當它不存在（規格 §5.2）——回 403 等於告訴對方「這個 id 存在，只是你不能看」
+      if (!await loadProjectForActor(req.params.id, req, 'id')) {
+        return res.status(404).json({ error: '找不到專案' });
+      }
       const { rows } = await query(
         'SELECT * FROM project_repos WHERE project_id = $1 ORDER BY is_primary DESC, label ASC',
         [req.params.id]
@@ -651,6 +703,10 @@ function registerRoutes(app) {
   // 讓前端顯示「clone 完成後才能選」，而不是報錯。
   app.get('/api/projects/:id/repos/:repoId/branches', verifyToken, async (req, res) => {
     try {
+      // 看不到就當它不存在（規格 §5.2）——回 403 等於告訴對方「這個 id 存在，只是你不能看」
+      if (!await loadProjectForActor(req.params.id, req, 'id')) {
+        return res.status(404).json({ error: '找不到專案' });
+      }
       const { rows: [repo] } = await query(
         'SELECT local_path, clone_status, base_branch FROM project_repos WHERE id=$1 AND project_id=$2',
         [req.params.repoId, req.params.id]
@@ -690,7 +746,7 @@ function registerRoutes(app) {
     }
   });
 
-  app.post('/api/projects/:id/repos', verifyToken, async (req, res) => {
+  app.post('/api/projects/:id/repos', verifyToken, requirePlatformAdmin, async (req, res) => {
     try {
       const { label, repo_url, is_primary, base_branch } = req.body;
       if (!label || !repo_url) return res.status(400).json({ error: 'label and repo_url required' });
@@ -764,7 +820,7 @@ function registerRoutes(app) {
     }
   });
 
-  app.put('/api/projects/:id/repos/:repoId', verifyToken, async (req, res) => {
+  app.put('/api/projects/:id/repos/:repoId', verifyToken, requirePlatformAdmin, async (req, res) => {
     try {
       const { label, repo_url, is_primary, base_branch } = req.body;
 
@@ -845,7 +901,7 @@ function registerRoutes(app) {
     }
   }
 
-  app.delete('/api/projects/:id/repos/:repoId', verifyToken, async (req, res) => {
+  app.delete('/api/projects/:id/repos/:repoId', verifyToken, requirePlatformAdmin, async (req, res) => {
     try {
       const { rows: [repo] } = await query(
         'SELECT clone_status, local_path FROM project_repos WHERE id=$1 AND project_id=$2',
@@ -870,7 +926,7 @@ function registerRoutes(app) {
     } catch (err) { res.status(500).json({ error: err.message }); }
   });
 
-  app.post('/api/projects/:id/repos/:repoId/reclone', verifyToken, async (req, res) => {
+  app.post('/api/projects/:id/repos/:repoId/reclone', verifyToken, requirePlatformAdmin, async (req, res) => {
     try {
       const { rows: [repo] } = await query(
         'SELECT * FROM project_repos WHERE id=$1 AND project_id=$2',
@@ -921,6 +977,17 @@ function registerRoutes(app) {
 
   app.get('/api/projects/:id/pending-release', verifyToken, async (req, res) => {
     try {
+      // 看不到就當它不存在（規格 §5.2）——回 403 等於告訴對方「這個 id 存在，只是你不能看」
+      if (!await loadProjectForActor(req.params.id, req, 'id')) {
+        return res.status(404).json({ error: '找不到專案' });
+      }
+      // 這支餵的是「上正式」彈窗，PENDING_RELEASE_SQL 沒有 user 條件——會把全公司每個人已核准
+      // 任務的標題都吐給打這支 API 的人。看得到專案不等於看得到別人任務的標題，門檻要跟真正
+      // 按得下「上正式」的人一致：平台管理員，或該公司綁定勾了 can_release 的公司管理員（規格
+      // §8 P1、§4.3）。看得到專案但按不了 → 403，不是 404（看得到本身沒有洩漏，403 才是正確語意）。
+      if (!await canReleaseProject(req.actor, req.params.id)) {
+        return res.status(403).json({ error: '只有平台管理員或公司管理員能查看待上正式清單' });
+      }
       const { rows } = await query(PENDING_RELEASE_SQL, [req.params.id]);
       // 彈窗要先知道「按下去會不會動到客戶正式機」才有辦法把警告寫對。
       // 沒有這段的話，警告只能寫死成一句通用的話，於是每次都出現，於是沒有人會看。
@@ -942,8 +1009,22 @@ function registerRoutes(app) {
 
   app.post('/api/projects/:id/release', verifyToken, async (req, res) => {
     try {
-      const { rows: [project] } = await query('SELECT id FROM projects WHERE id = $1', [req.params.id]);
+      // 看不到就當它不存在（規格 §5.2），且務必排在 canReleaseProject 之前：
+      // canReleaseProject 只分「看得到但不能按」（403）與「不能按」，不負責分辨
+      // 「看不到」與「真的不存在」——先過 loadProjectForActor 的範圍檢查再讓它接手，
+      // 才不會讓別家公司的管理員用「打得到 403 還是 404」當 oracle 探出 id 存在。
+      // ⚠ 別把這一步搬到 canReleaseProject 之後、也別改回裸的 SELECT，那正是本輪要補的洞。
+      const project = await loadProjectForActor(req.params.id, req, 'id');
       if (!project) return res.status(404).json({ error: 'Not found' });
+
+      // 上正式是專案層批次，會把同事已核准的任務一起帶上去，所以必須有人負責（規格 §4.3）：
+      // 平台管理員，或「該公司對這個專案的綁定勾了可上正式」的公司管理員。一般成員一律不行。
+      // ⚠ 這一行是硬性前提：第 1 部把 GIT 憑證改成可退回公司憑證，順手拆掉了
+      // 「沒有個人 PAT 就擋」這道事實上的煞車。沒有這一行，只要有人替公司設了 PAT，
+      // 該公司每個成員都能對任何專案按上正式。
+      if (!await canReleaseProject(req.actor, req.params.id)) {
+        return res.status(403).json({ error: '只有平台管理員或公司管理員能上正式' });
+      }
 
       // GIT 憑證退回規則（09-11／09-14 裁決，規格 §6）：個人 → 公司 → 擋下。
       // 原本刻意「只用本人 PAT、不退機器憑證」是為了歸屬，但客戶不會每個人都有 PAT；
@@ -1049,10 +1130,14 @@ function registerRoutes(app) {
         const detail = deploySkipped
           ? `客戶正式區未更新：${deploySkipReason}`
           : describeResults(deploy, targets, '客戶正式區').join('\n') || '客戶正式區未更新。';
+        // 規格 §6／09-11 裁決：GIT 憑證退回個人 → 公司後，拿掉了「只用本人 PAT」那道歸屬煞車，
+        // 改由 buildGitEnv 回傳的 source 補償——但 source 不落地就等於沒補償（全跑修法波第 3 項）。
+        // 這裡是這條退回鏈唯一真正「代表某張任務推 code」的落點：task_logs 是使用者事後唯一找得回來的地方。
+        const sourceLabel = gitEnv.source === 'company' ? '公司 GitHub 憑證' : '個人 GitHub 憑證';
         for (const t of tasks) {
           await query(
             "INSERT INTO task_logs (task_id, role, content) VALUES ($1, 'ai', $2)",
-            [t.id, `[上正式] 程式已併入 main。\n${detail}`]
+            [t.id, `[上正式] 程式已併入 main（使用${sourceLabel}推送）。\n${detail}`]
           ).catch(() => {});
         }
       }
@@ -1066,6 +1151,14 @@ function registerRoutes(app) {
   app.put('/api/tasks/:taskDbId/project', verifyToken, async (req, res) => {
     try {
       const { project_id } = req.body;
+      // 目標專案 id 是從 body 進來的，不是路徑參數——之後補的靜態守衛只比對路徑上的
+      // :id，攔不到這裡，範圍檢查只能手動補在這一步。看不到的專案當它不存在（規格
+      // §5.2）：否則使用者能把自己的任務改掛到別家公司的專案上，而任務的 project_id
+      // 決定 pipeline 用誰的 repo 跑 AI。project_id 為空（含 0／''／undefined）維持
+      // 原本「拔掉專案綁定」的語意，不用經過這道檢查。
+      if (project_id && !await loadProjectForActor(project_id, req, 'id')) {
+        return res.status(404).json({ error: '找不到專案' });
+      }
       const { rows } = await query(
         'UPDATE tasks SET project_id = $2 WHERE id = $1 AND user_id = $3 RETURNING id, project_id',
         [req.params.taskDbId, project_id || null, req.userId]

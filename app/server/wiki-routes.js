@@ -1,5 +1,6 @@
 const { query } = require('./db');
 const { verifyToken } = require('./auth');
+const { loadProjectForActor } = require('./lib/tenant-access');
 const { initProjectWiki, refreshWikiNode } = require('./pipeline/library-agent');
 const { aiEndpointGuard } = require('./lib/ai-token');
 const { resolveProjectId } = require('./lib/project-ref');
@@ -20,6 +21,11 @@ function registerRoutes(app) {
 
   app.get(base, verifyToken, async (req, res) => {
     try {
+      // wiki 目前完全沒有專案層檢查（只驗登入），帶別家的 projectId 就看得到——
+      // 進來之前先驗看不看得到這個專案（規格 §5.3）。
+      if (!await loadProjectForActor(req.params.projectId, req, 'id')) {
+        return res.status(404).json({ error: '找不到專案' });
+      }
       const { rows } = await query(
         `SELECT id, slug, title, parent_id, node_type, updated_at
          FROM wiki_pages WHERE project_id = $1
@@ -32,6 +38,11 @@ function registerRoutes(app) {
 
   app.post(`${base}/init`, verifyToken, async (req, res) => {
     try {
+      // wiki 目前完全沒有專案層檢查（只驗登入），帶別家的 projectId 就看得到——
+      // 進來之前先驗看不看得到這個專案（規格 §5.3）。
+      if (!await loadProjectForActor(req.params.projectId, req, 'id')) {
+        return res.status(404).json({ error: '找不到專案' });
+      }
       // 已經有 wiki 就擋在這裡。initProjectWiki 走 _upsertNode 的 ON CONFLICT DO UPDATE，
       // 誤觸一次就用骨架把累積下來的內容整個覆寫掉（排障結論、人工補的段落全沒，且無備份）。
       // 這是防禦縱深：前端不該讓使用者按到，但這條路徑的破壞是不可逆的，值得在端點再擋一次。
@@ -49,6 +60,11 @@ function registerRoutes(app) {
 
   app.post(`${base}/:slug/refresh`, verifyToken, async (req, res) => {
     try {
+      // wiki 目前完全沒有專案層檢查（只驗登入），帶別家的 projectId 就看得到——
+      // 進來之前先驗看不看得到這個專案（規格 §5.3）。這支還會呼叫 AI，擋不住等於幫別家燒錢。
+      if (!await loadProjectForActor(req.params.projectId, req, 'id')) {
+        return res.status(404).json({ error: '找不到專案' });
+      }
       const { rows: [node] } = await query(
         'SELECT node_type FROM wiki_pages WHERE project_id=$1 AND slug=$2',
         [req.params.projectId, req.params.slug]
@@ -64,6 +80,11 @@ function registerRoutes(app) {
 
   app.post(base, verifyToken, async (req, res) => {
     try {
+      // wiki 目前完全沒有專案層檢查（只驗登入），帶別家的 projectId 就看得到——
+      // 進來之前先驗看不看得到這個專案（規格 §5.3）。
+      if (!await loadProjectForActor(req.params.projectId, req, 'id')) {
+        return res.status(404).json({ error: '找不到專案' });
+      }
       const { slug, title, content } = req.body;
       if (!slug || !title) return res.status(400).json({ error: 'slug and title required' });
       const { rows } = await query(
@@ -83,6 +104,11 @@ function registerRoutes(app) {
 
   app.get(`${base}/:slug/raw`, verifyToken, async (req, res) => {
     try {
+      // wiki 目前完全沒有專案層檢查（只驗登入），帶別家的 projectId 就看得到——
+      // 進來之前先驗看不看得到這個專案（規格 §5.3）。
+      if (!await loadProjectForActor(req.params.projectId, req, 'id')) {
+        return res.status(404).json({ error: '找不到專案' });
+      }
       const { rows: [page] } = await query(
         'SELECT content FROM wiki_pages WHERE project_id = $1 AND slug = $2',
         [req.params.projectId, req.params.slug]
@@ -94,6 +120,11 @@ function registerRoutes(app) {
 
   app.get(`${base}/:slug`, verifyToken, async (req, res) => {
     try {
+      // wiki 目前完全沒有專案層檢查（只驗登入），帶別家的 projectId 就看得到——
+      // 進來之前先驗看不看得到這個專案（規格 §5.3）。
+      if (!await loadProjectForActor(req.params.projectId, req, 'id')) {
+        return res.status(404).json({ error: '找不到專案' });
+      }
       const { rows: [page] } = await query(
         'SELECT * FROM wiki_pages WHERE project_id = $1 AND slug = $2',
         [req.params.projectId, req.params.slug]
@@ -105,6 +136,11 @@ function registerRoutes(app) {
 
   app.put(`${base}/:slug`, verifyToken, async (req, res) => {
     try {
+      // wiki 目前完全沒有專案層檢查（只驗登入），帶別家的 projectId 就看得到——
+      // 進來之前先驗看不看得到這個專案（規格 §5.3）。
+      if (!await loadProjectForActor(req.params.projectId, req, 'id')) {
+        return res.status(404).json({ error: '找不到專案' });
+      }
       const { title, content } = req.body;
       const { rows } = await query(
         `UPDATE wiki_pages SET
@@ -122,6 +158,11 @@ function registerRoutes(app) {
 
   app.delete(`${base}/:slug`, verifyToken, async (req, res) => {
     try {
+      // wiki 目前完全沒有專案層檢查（只驗登入），帶別家的 projectId 就看得到——
+      // 進來之前先驗看不看得到這個專案（規格 §5.3）。
+      if (!await loadProjectForActor(req.params.projectId, req, 'id')) {
+        return res.status(404).json({ error: '找不到專案' });
+      }
       const { rows: [node] } = await query(
         'SELECT node_type FROM wiki_pages WHERE project_id=$1 AND slug=$2',
         [req.params.projectId, req.params.slug]

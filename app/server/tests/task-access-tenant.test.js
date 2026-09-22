@@ -13,7 +13,7 @@ const { loadTaskForActor } = require('../lib/task-access');
 process.env.JWT_SECRET = 'test-jwt-secret';
 process.env.APP_SECRET = 'test-app-secret';
 
-let dbModule, aId, bId, pA, taskInA, taskNoProject, userA, userB;
+let dbModule, aId, bId, pA, pShared, taskInA, taskNoProject, userA, userB, userA2, taskColleagueA, taskSharedB;
 
 beforeAll(async () => {
   const db = newDb();
@@ -43,6 +43,22 @@ beforeAll(async () => {
   taskNoProject = (await one(
     "INSERT INTO tasks (user_id, task_id, source, title, status) VALUES ($1,'t2','manual','沒有專案的任務','new') RETURNING id",
     [userA]
+  )).id;
+
+  // 公司管理員看得到自家公司同事任務（規格 §8 P1 第二句）測試用：甲公司另一名同事，
+  // 以及一個同時綁甲、乙兩家公司的共用專案，各自在裡面建一張任務。
+  userA2 = (await one(
+    "INSERT INTO users (username, password_hash, display_name, role, company_id) VALUES ('ua2','x','甲員2','user',$1) RETURNING id", [aId]
+  )).id;
+  pShared = (await one("INSERT INTO projects (name, odoo_version) VALUES ('共用專案', '17') RETURNING id")).id;
+  await dbModule.query('INSERT INTO project_companies (project_id, company_id) VALUES ($1, $2), ($1, $3)', [pShared, aId, bId]);
+  taskColleagueA = (await one(
+    "INSERT INTO tasks (user_id, task_id, source, title, status, project_id) VALUES ($1,'t3','manual','甲同事的任務','new',$2) RETURNING id",
+    [userA2, pShared]
+  )).id;
+  taskSharedB = (await one(
+    "INSERT INTO tasks (user_id, task_id, source, title, status, project_id) VALUES ($1,'t4','manual','乙同事在共用專案的任務','new',$2) RETURNING id",
+    [userB, pShared]
   )).id;
 });
 
@@ -83,6 +99,20 @@ test('欄位清單把 project_id 取了別名（as pid）→ 租戶檢查仍要�
   await dbModule.query('DELETE FROM project_companies WHERE project_id = $1 AND company_id = $2', [pA, aId]);
   expect(await loadTaskForActor(taskInA, req(userA, aId), 'id, user_id, project_id as pid')).toBeNull();
   await dbModule.query('INSERT INTO project_companies (project_id, company_id) VALUES ($1, $2)', [pA, aId]);
+});
+
+test('公司管理員看得到同公司同事的任務（規格 §8 P1 第二句）', async () => {
+  const caReq = req(userA, aId, { isCompanyAdmin: true, role: 'company_admin' });
+  expect(await loadTaskForActor(taskColleagueA, caReq, 'id, user_id, project_id')).not.toBeNull();
+});
+
+test('公司管理員看不到共用專案下、另一家公司同事的任務（歸屬看建立者不看專案）→ 404', async () => {
+  const caReq = req(userA, aId, { isCompanyAdmin: true, role: 'company_admin' });
+  expect(await loadTaskForActor(taskSharedB, caReq, 'id, user_id, project_id')).toBeNull();
+});
+
+test('一般使用者仍看不到同公司同事的任務（第一句規則不變，回歸守衛）', async () => {
+  expect(await loadTaskForActor(taskColleagueA, req(userA, aId), 'id, user_id, project_id')).toBeNull();
 });
 
 test('平台管理員照舊看得到全部（含別人的、含沒綁公司的專案）', async () => {

@@ -86,7 +86,9 @@ async function parseAgentResult(raw, { parse, lenientParse, schemaHint, signal, 
   }
   try {
     // 契約補救固定 Claude/haiku：只做文字整形，不隨原 agent 改 provider 以免多一個變數。
-    const repaired = await runAgent(REPAIR_PROMPT(raw, parseErr, schemaHint), { provider: 'claude', model: 'haiku', signal, agentType: 'repair' });
+    // userId 一併帶入（本函式的參數本來就有）：這通 runAgent 一樣會經過 canRun 的公司可用性
+    // 檢查（規格 §7），漏帶會讓公司已停用的客戶還能透過「輸出格式壞掉觸發補救」繼續燒 AI 的錢。
+    const repaired = await runAgent(REPAIR_PROMPT(raw, parseErr, schemaHint), { provider: 'claude', model: 'haiku', signal, agentType: 'repair', userId });
     if (ref) await logTokenUsage(ref, userId, 'repair', repaired.usage, repaired.durationMs);
     out = doParse(parse, extractResult(repaired.raw ?? repaired.text));
   } catch (err) {
@@ -110,7 +112,8 @@ async function repairYamlPayload(yamlStr, parseErr, { schemaHint, signal, ref, u
     '\n\n' + yamlStr;
   let fixed = null;
   try {
-    const r = await runAgent(prompt, { provider: 'claude', model: 'haiku', signal, agentType: 'repair' });
+    // userId 理由同 parseAgentResult 那通 repair 呼叫：canRun 的公司可用性檢查靠它才擋得住。
+    const r = await runAgent(prompt, { provider: 'claude', model: 'haiku', signal, agentType: 'repair', userId });
     if (ref) await logTokenUsage(ref, userId, 'repair', r.usage, r.durationMs);
     fixed = extractResult(r.raw ?? r.text);
   } catch (err) {

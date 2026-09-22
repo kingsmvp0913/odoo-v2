@@ -152,7 +152,10 @@ describe('管理員限定課程不對一般使用者出現', () => {
   const courses = read('js/tour-courses.js');
   // /admin/settings 是 UI Next 才有的拆分（舊版三個錨點都在 /admin 一頁上）。
   // 漏列它的症狀是「一般使用者看得到那堂課、點下去被導回首頁」。
-  const ADMIN_ROUTES = ['/token-report', '/admin', '/admin/settings'];
+  // /pipeline-flow 與 /admin/pipelines：3b Task 8b 補列——多租戶案把前者收斂成
+  // requiresAdmin 後，「進度與通知」課整課走不通（後者本就是 requiresAdmin），
+  // 這份清單當時沒跟著補，同一顆地雷才會踩兩次。
+  const ADMIN_ROUTES = ['/token-report', '/admin', '/admin/settings', '/pipeline-flow', '/admin/pipelines'];
 
   test('引擎依 UserStore.role 過濾 adminOnly', () => {
     const src = read('js/tour.js');

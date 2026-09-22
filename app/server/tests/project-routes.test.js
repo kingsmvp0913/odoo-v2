@@ -890,6 +890,28 @@ test('POST release：全部 repo 成功 → 待上正式的任務被標記，已
     .toBe(new Date(before.merged_to_main_at).getTime());
 });
 
+// 意圖（全跑修法波第 3 項）：git-identity.js 的 buildGitEnv 回傳的 source 記錄「這次是用誰的
+// 身分推的」，但原本沒有任何生產路徑真正讀它——歸屬形同不存在。task_logs 是使用者事後找得回來
+// 的唯一真相，這支釘住「source 真的被寫進去了」，而不只是被算出來就丟掉。
+test('POST release：task_logs 記下這次是用哪種身分推的（source 不再算了就丟）', async () => {
+  gitMock.releaseAiToMain.mockReset().mockResolvedValue(okRelease);
+  const { pid } = await makeReleaseProject('rel-source'); // makeReleaseProject 給 userId 設個人 PAT
+  const pending = await addTask(pid, { approved: true });
+
+  const res = await request(app).post(`/api/projects/${pid}/release`)
+    .set('Authorization', `Bearer ${token}`).send({});
+  expect(res.status).toBe(200);
+
+  // 不用 LIKE 比對內容——pg-mem 的 LIKE 轉 regex 沒有 dotAll，訊息本身帶換行會讓 `%` 跨不過去
+  // （rules/testing.md #13）；改用 role 過濾，這支任務只會有這一筆 AI 訊息。
+  const { rows: [t] } = await dbModule.query('SELECT id FROM tasks WHERE task_id = $1', [pending]);
+  const { rows: logs } = await dbModule.query(
+    "SELECT content FROM task_logs WHERE task_id = $1 AND role = 'ai' ORDER BY id DESC LIMIT 1",
+    [t.id]
+  );
+  expect(logs[0].content).toContain('個人 GitHub 憑證');
+});
+
 test('POST release：合併衝突 → 不標記，回傳衝突檔案', async () => {
   gitMock.releaseAiToMain.mockReset().mockResolvedValue(
     { merged: false, hasConflicts: true, conflictFiles: ['models/sale_order.py'], restoreFailed: false }

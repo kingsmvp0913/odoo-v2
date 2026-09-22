@@ -164,3 +164,62 @@ describe('範圍函式（規格 §5.2）', () => {
     expect(canManageCompanyUsers(actor({ companyId: aId }), aId)).toBe(false); // 一般使用者不行
   });
 });
+
+describe('requirePlatformAdmin 與 columns 白名單（第 2 部）', () => {
+  const { requirePlatformAdmin } = require('../lib/tenant-access');
+
+  const runMw = (actor) => {
+    const req = { actor };
+    let status = null, body = null, nexted = false;
+    const res = { status(s) { status = s; return this; }, json(b) { body = b; return this; } };
+    requirePlatformAdmin(req, res, () => { nexted = true; });
+    return { status, body, nexted };
+  };
+
+  test('平台管理員放行', () => {
+    expect(runMw({ isPlatformAdmin: true }).nexted).toBe(true);
+  });
+
+  test('公司管理員擋下——它不是平台管理員（整個角色模型就靠這一點）', () => {
+    const r = runMw({ isPlatformAdmin: false, isCompanyAdmin: true, companyId: 3 });
+    expect(r.nexted).toBe(false);
+    expect(r.status).toBe(403);
+  });
+
+  test('一般使用者擋下', () => {
+    expect(runMw({ isPlatformAdmin: false }).status).toBe(403);
+  });
+
+  test('完全沒有 actor 也擋下（不是放行）', () => {
+    expect(runMw(undefined).status).toBe(403);
+  });
+});
+
+describe('loadProjectForActor 的 columns 白名單', () => {
+  const { loadProjectForActor } = require('../lib/tenant-access');
+  let dbModule;
+
+  beforeAll(async () => {
+    const db = newDb();
+    const { Pool } = db.adapters.createPg();
+    dbModule = require('../db');
+    dbModule._setPoolForTesting(new Pool());
+    await dbModule.migrate();
+  });
+
+  afterAll(() => dbModule._setPoolForTesting(null));
+
+  const adminReq = { actor: { isPlatformAdmin: true, companyId: null } };
+
+  test('欄位清單含 SQL 片段 → 丟例外，不送進資料庫', async () => {
+    await expect(loadProjectForActor(1, adminReq, 'id, name; DROP TABLE projects'))
+      .rejects.toThrow(/欄位清單/);
+    await expect(loadProjectForActor(1, adminReq, '(SELECT password_hash FROM users)'))
+      .rejects.toThrow(/欄位清單/);
+  });
+
+  test('正常的欄位清單照常運作', async () => {
+    await expect(loadProjectForActor(999999, adminReq, 'id, name')).resolves.toBeNull();
+    await expect(loadProjectForActor(999999, adminReq, '*')).resolves.toBeNull();
+  });
+});

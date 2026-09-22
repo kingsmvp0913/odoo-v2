@@ -25,15 +25,22 @@ beforeAll(async () => {
   adminToken = setup.body.token;
 
   // 第二位＝一般使用者，本測試的主角
+  // 租戶隔離（Task 7）：POST /api/admin/users 建一般使用者現在強制要帶 company_id，
+  // 先建一家公司給這個 fixture 帳號掛。
+  const { rows: [co] } = await dbModule.query(
+    "INSERT INTO companies (name, is_active) VALUES ('測試公司', true) RETURNING id"
+  );
   await request(app).post('/api/admin/users').set('Authorization', `Bearer ${adminToken}`)
-    .send({ username: 'bob', password: 'pass1234', display_name: 'Bob', role: 'user' });
+    .send({ username: 'bob', password: 'pass1234', display_name: 'Bob', role: 'user', company_id: co.id });
   const login = await request(app).post('/api/auth/login').send({ username: 'bob', password: 'pass1234' });
   userToken = login.body.token;
 
-  const p = await request(app).post('/api/projects').set('Authorization', `Bearer ${userToken}`)
+  // 建專案收回給平台管理員（規格 §2），fixture 的兩個專案改用 adminToken 建立；
+  // bob／userToken 留著給下面「一般使用者打 mapping → 403」那支用。
+  const p = await request(app).post('/api/projects').set('Authorization', `Bearer ${adminToken}`)
     .send({ name: 'MapMain', folder_name: 'mapmain', odoo_version: '17.0', description: '原描述' });
   projectId = p.body.id;
-  const o = await request(app).post('/api/projects').set('Authorization', `Bearer ${userToken}`)
+  const o = await request(app).post('/api/projects').set('Authorization', `Bearer ${adminToken}`)
     .send({ name: 'MapOther', folder_name: 'mapother', odoo_version: '17.0' });
   otherId = o.body.id;
 }, 30000);
@@ -46,11 +53,21 @@ test('未帶 token → 401', async () => {
   expect(res.status).toBe(401);
 });
 
-// 這是本端點存在的理由：舊的 PATCH /api/projects/:id 對一般使用者回 403，
-// 專案建得起來卻永遠收不到任務。
-test('一般使用者可儲存對應 → 200 且值真的寫進去', async () => {
+// 舊版意圖（已被規格 §2 收回）：「舊的 PATCH /api/projects/:id 對一般使用者回 403，
+// 專案建得起來卻永遠收不到任務」——那個前提是「一般使用者可以建專案」，規格 §2 把
+// 建專案／加 repo 整組收回給平台管理員之後，這個前提不成立，一般使用者連這個端點
+// 也不該進得去。原本這一支測的兩件事（誰能打、寫不寫得進去）拆成下面兩支各自釀。
+test('一般使用者打 mapping → 403（規格 §2 收回客戶自建/自改能力）', async () => {
   const res = await request(app).patch(`/api/projects/${projectId}/mapping`)
     .set('Authorization', `Bearer ${userToken}`)
+    .send({ odoo_project_name: 'X' });
+  expect(res.status).toBe(403);
+});
+
+// 「寫得進去」這條性質本身要保住，只是主角換成平台管理員。
+test('平台管理員打 mapping → 200 且值真的寫進去', async () => {
+  const res = await request(app).patch(`/api/projects/${projectId}/mapping`)
+    .set('Authorization', `Bearer ${adminToken}`)
     .send({ odoo_project_name: '甲專案', service_respondent_name: '客服甲' });
   expect(res.status).toBe(200);
   const { rows: [row] } = await dbModule.query(
@@ -62,7 +79,7 @@ test('一般使用者可儲存對應 → 200 且值真的寫進去', async () =>
 // 有些客戶的工單只填主要聯絡人、回饋帳號是共用帳號，只比 respondent 會整批綁不到。
 test('主要聯絡人也能存成對應來源', async () => {
   const res = await request(app).patch(`/api/projects/${projectId}/mapping`)
-    .set('Authorization', `Bearer ${userToken}`)
+    .set('Authorization', `Bearer ${adminToken}`)
     .send({ service_contact_name: '聯絡人甲' });
   expect(res.status).toBe(200);
   const { rows: [row] } = await dbModule.query(
@@ -73,9 +90,9 @@ test('主要聯絡人也能存成對應來源', async () => {
 // 衝突檢查若漏掉新欄位，兩個專案會綁到同一個聯絡人，同步時看誰先被查到就歸給誰。
 test('主要聯絡人被別的專案綁走 → 409，且原值不被覆寫', async () => {
   await request(app).patch(`/api/projects/${projectId}/mapping`)
-    .set('Authorization', `Bearer ${userToken}`).send({ service_contact_name: '聯絡人乙' });
+    .set('Authorization', `Bearer ${adminToken}`).send({ service_contact_name: '聯絡人乙' });
   const res = await request(app).patch(`/api/projects/${otherId}/mapping`)
-    .set('Authorization', `Bearer ${userToken}`).send({ service_contact_name: '聯絡人乙' });
+    .set('Authorization', `Bearer ${adminToken}`).send({ service_contact_name: '聯絡人乙' });
   expect(res.status).toBe(409);
   const { rows: [row] } = await dbModule.query(
     'SELECT service_contact_name FROM projects WHERE id = $1', [otherId]);
@@ -84,7 +101,7 @@ test('主要聯絡人被別的專案綁走 → 409，且原值不被覆寫', asy
 
 test('來源名稱已被別的專案綁走 → 409，且原值不被覆寫', async () => {
   const res = await request(app).patch(`/api/projects/${otherId}/mapping`)
-    .set('Authorization', `Bearer ${userToken}`)
+    .set('Authorization', `Bearer ${adminToken}`)
     .send({ odoo_project_name: '甲專案' });
   expect(res.status).toBe(409);
   expect(res.body.error).toContain('甲專案');
@@ -93,12 +110,13 @@ test('來源名稱已被別的專案綁走 → 409，且原值不被覆寫', asy
   expect(row.odoo_project_name).toBeNull();
 });
 
-// 安全核心：本端點刻意不掛 requireAdmin，因此絕不能成為改其他欄位的旁門。
+// 安全核心：即使呼叫者是平台管理員，本端點的可寫欄位仍限定在對應欄位，
+// 不能被拿來當改其他欄位（name／folder_name／e2e_disabled）的旁門。
 test('夾帶其他欄位一律忽略（name／folder_name／e2e_disabled 不得被改）', async () => {
   const { rows: [before] } = await dbModule.query(
     'SELECT name, folder_name, e2e_disabled FROM projects WHERE id = $1', [projectId]);
   const res = await request(app).patch(`/api/projects/${projectId}/mapping`)
-    .set('Authorization', `Bearer ${userToken}`)
+    .set('Authorization', `Bearer ${adminToken}`)
     .send({ odoo_project_name: '甲專案2', name: '被竄改', folder_name: 'hacked', e2e_disabled: false });
   expect(res.status).toBe(200);
   const { rows: [after] } = await dbModule.query(
@@ -112,7 +130,7 @@ test('夾帶其他欄位一律忽略（name／folder_name／e2e_disabled 不得�
 // 沿用既有語意：body 帶此鍵才動，允許用空字串明確清空；未帶的鍵整欄不動。
 test('只帶一個鍵時另一個欄位不動；空字串可清空', async () => {
   await request(app).patch(`/api/projects/${projectId}/mapping`)
-    .set('Authorization', `Bearer ${userToken}`)
+    .set('Authorization', `Bearer ${adminToken}`)
     .send({ odoo_project_name: '' });
   const { rows: [row] } = await dbModule.query(
     'SELECT odoo_project_name, service_respondent_name FROM projects WHERE id = $1', [projectId]);
@@ -122,7 +140,7 @@ test('只帶一個鍵時另一個欄位不動；空字串可清空', async () =>
 
 test('專案不存在 → 404', async () => {
   const res = await request(app).patch('/api/projects/999999/mapping')
-    .set('Authorization', `Bearer ${userToken}`)
+    .set('Authorization', `Bearer ${adminToken}`)
     .send({ odoo_project_name: 'X' });
   expect(res.status).toBe(404);
 });

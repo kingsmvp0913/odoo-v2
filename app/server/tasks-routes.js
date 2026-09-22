@@ -13,6 +13,7 @@ const { invalidate: invalidateEmbedding } = require('./lib/embedding-index');
 const { withProjectLock } = require('./pipeline/project-lock');
 const { saveAttachmentFile, deleteTaskDir, readAttachmentFile, sniffFile, attachmentSize, uploadAttachmentFiles } = require('./lib/attachments');
 const { loadTaskForActor } = require('./lib/task-access');
+const { loadProjectForActor, requirePlatformAdmin, hasCompany } = require('./lib/tenant-access');
 const { isMaintenance } = require('./pipeline/maintenance');
 
 // multer 設定已移到 lib/attachments 當單一來源：新增任務／留言／人工退回三個入口共用同一組限制，
@@ -218,9 +219,19 @@ function registerRoutes(app) {
     try {
       const { needs_action, source, status, archived } = req.query;
       const showAll = req.query.all === 'true' && req.isAdmin;
+      // 公司管理員看得到自家公司的任務（規格 §8 P1 第二句）——歸屬看任務是誰建的，不是專案，
+      // 所以不能比照 showAll 整段拿掉條件（那樣會連別家公司的任務都一起吐出去），
+      // 改成把 user_id 條件換成「屬於同一家公司的使用者」。
+      const showCompany = !showAll && req.query.all === 'true'
+        && req.actor?.isCompanyAdmin && hasCompany(req.actor.companyId);
       const conditions = [];
       const params = [];
-      if (!showAll) { conditions.push(`user_id = $${params.length + 1}`); params.push(req.userId); }
+      if (showCompany) {
+        conditions.push(`user_id IN (SELECT id FROM users WHERE company_id = $${params.length + 1})`);
+        params.push(req.actor.companyId);
+      } else if (!showAll) {
+        conditions.push(`user_id = $${params.length + 1}`); params.push(req.userId);
+      }
       conditions.push(archived === 'true' ? 'is_hidden = true' : 'is_hidden = false');
 
       if (needs_action === 'true') {
@@ -260,6 +271,12 @@ function registerRoutes(app) {
       const { title, original_text, project_id, chat_id } = req.body || {};
       if (!title || !String(title).trim()) {
         return res.status(400).json({ error: '請填寫標題' });
+      }
+      // 帶別家專案 id 建出來的任務，本人之後也讀不到（loadTaskForActor 會因為公司對不上而擋），
+      // 變成一張誰都打不開、pipeline 卻照樣派 AI 去跑的殭屍任務。所以在建立當下就擋。
+      // project_id 可以不帶——非專案任務是合法的，只有帶了才驗。
+      if (project_id && !await loadProjectForActor(project_id, req, 'id')) {
+        return res.status(404).json({ error: '找不到專案' });
       }
       const taskId = `manual_${Date.now()}`;
       const { rows } = await query(
@@ -343,13 +360,23 @@ function registerRoutes(app) {
   // Task detail + last 5 logs + 工單主附件
   app.get('/api/tasks/:id', verifyToken, async (req, res) => {
     try {
+      // 租戶邊界（規格 §5.2）：下面那條 SQL 只查 owner／admin，專案綁定被解除後 owner
+      // 仍看得到自己那張——loadTaskForActor 多一層 canSeeProject 才會把它擋下。
+      if (!await loadTaskForActor(req.params.id, req, 'id')) return res.status(404).json({ error: 'Task not found' });
+      // 這條 SQL 沒有經過 loadTaskForActor（它只回一欄當守衛，這裡要撈全部欄位），
+      // 條件是各自獨立複製的一份——公司管理員的第三個分支（規格 §8 P1 第二句）要跟著補在這，
+      // 否則上面剛放行的守衛在這裡又被舊條件擋回 404。子查詢沒有參照外層 t，不是相關子查詢，
+      // pg-mem 撐得住（相關子查詢那條限制參見 lib/task-access.js 的另一種寫法）。
+      const isCompanyAdmin = !!req.actor?.isCompanyAdmin && hasCompany(req.actor.companyId);
       const { rows: tasks } = await query(
         `SELECT t.*, e.status AS env_status
            FROM tasks t
            -- 不限 running：理由同列表 route（環境被回收後入口不得消失）
            LEFT JOIN odoo_envs e ON e.project_id = t.project_id
-          WHERE t.id = $1 AND (t.user_id = $2 OR $3 = true) AND t.is_hidden = false`,
-        [req.params.id, req.userId, !!req.isAdmin]
+          WHERE t.id = $1 AND (t.user_id = $2 OR $3 = true
+                OR ($4 = true AND t.user_id IN (SELECT id FROM users WHERE company_id = $5)))
+                AND t.is_hidden = false`,
+        [req.params.id, req.userId, !!req.isAdmin, isCompanyAdmin, req.actor?.companyId ?? null]
       );
       if (!tasks.length) return res.status(404).json({ error: 'Task not found' });
 
@@ -552,6 +579,9 @@ function registerRoutes(app) {
   // 附件下載：驗證附件屬於該任務且該任務屬於目前使用者，再串流本機檔案回傳
   app.get('/api/tasks/:id/attachments/:attId/download', verifyToken, async (req, res) => {
     try {
+      // 租戶邊界（規格 §5.2）：下面那條 SQL 只查 owner／admin，專案綁定被解除後 owner
+      // 仍看得到自己那張——loadTaskForActor 多一層 canSeeProject 才會把它擋下。
+      if (!await loadTaskForActor(req.params.id, req, 'id')) return res.status(404).json({ error: 'Attachment not found' });
       const { rows } = await query(
         `SELECT a.filename, a.mimetype, a.file_path
          FROM task_attachments a
@@ -595,7 +625,18 @@ function registerRoutes(app) {
   });
 
   // 執行歷程：該任務所有事件（依序回放，供 Terminal 頁載入歷史）
-  app.get('/api/tasks/:id/events', verifyToken, async (req, res) => {
+  // 2026-09-21 使用者裁決 D2「兩個都收」：終端機頁面本身已在 app.js 收斂為
+  // requiresAdmin，但這支後端端點本來就對所有登入者開放（規格 §5.5 沒列到，逐項
+  // 核實才發現）。403 而非 404：這個人看得到任務本人（是他自己的），只是不能看
+  // 執行歷程——屬於「看得到但不能做這個動作」。
+  //
+  // 已知且接受的退化（裁決 P3B-5，不修）：舊版前端 views/TaskDetail.js 有一個
+  // 一律顯示、不分角色的「即時歷程記錄」面板會打這支端點，它的錯誤處理是
+  // `catch { /* best-effort */ }`——403 會被靜靜吞掉，畫面退化成「尚無執行紀錄」，
+  // 跟這張任務真的沒有紀錄長得一模一樣。舊版只走 `?ui=legacy`、本計畫明講不維護，
+  // 所以不修；但如果哪天舊版又要維護，那個面板需要比照新版加上角色判斷。
+  // （views/Terminal.js 同樣打這支端點，但它的路由早已是管理員限定，不受影響。）
+  app.get('/api/tasks/:id/events', verifyToken, requirePlatformAdmin, async (req, res) => {
     try {
       const task = await loadTaskForActor(req.params.id, req, 'id');
       if (!task) return res.status(404).json({ error: 'Task not found' });
@@ -680,10 +721,9 @@ function registerRoutes(app) {
     } catch (err) { res.status(500).json({ error: err.message }); }
   });
 
-  app.post('/api/tasks/:id/archive', verifyToken, async (req, res) => {
+  // admin only：改走共用的 requirePlatformAdmin（req.actor 已由 verifyToken 備好，免再查一次 DB）
+  app.post('/api/tasks/:id/archive', verifyToken, requirePlatformAdmin, async (req, res) => {
     try {
-      const { rows: [me] } = await query('SELECT role FROM users WHERE id = $1', [req.userId]);
-      if (me?.role !== 'admin') return res.status(403).json({ error: '僅管理員可封存任務' });
       const { rows } = await query('SELECT id, project_id, git_branch FROM tasks WHERE id = $1', [req.params.id]);
       if (!rows.length) return res.status(404).json({ error: 'Task not found' });
       abortTask(req.params.id); // 封存執行中任務：中止在飛 agent，否則子行程續跑到逾時（健檢項11）
@@ -697,10 +737,8 @@ function registerRoutes(app) {
   });
 
   // Unarchive task (admin only — restores to active list)
-  app.post('/api/tasks/:id/unarchive', verifyToken, async (req, res) => {
+  app.post('/api/tasks/:id/unarchive', verifyToken, requirePlatformAdmin, async (req, res) => {
     try {
-      const { rows: [me] } = await query('SELECT role FROM users WHERE id = $1', [req.userId]);
-      if (me?.role !== 'admin') return res.status(403).json({ error: '僅管理員可解除封存' });
       const { rows } = await query('SELECT id FROM tasks WHERE id = $1', [req.params.id]);
       if (!rows.length) return res.status(404).json({ error: 'Task not found' });
       await query(
@@ -712,10 +750,8 @@ function registerRoutes(app) {
   });
 
   // Delete task permanently (admin only — removes from DB; re-sync will re-import)
-  app.delete('/api/tasks/:id', verifyToken, async (req, res) => {
+  app.delete('/api/tasks/:id', verifyToken, requirePlatformAdmin, async (req, res) => {
     try {
-      const { rows: [me] } = await query('SELECT role FROM users WHERE id = $1', [req.userId]);
-      if (me?.role !== 'admin') return res.status(403).json({ error: '僅管理員可刪除任務' });
       const { rows } = await query('SELECT id, task_id, project_id, git_branch, approved_at, analysis_yaml FROM tasks WHERE id = $1', [req.params.id]);
       if (!rows.length) return res.status(404).json({ error: 'Task not found' });
       if (rows[0].approved_at) return res.status(403).json({ error: '已人工審核通過的任務不可刪除' });

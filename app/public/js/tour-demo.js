@@ -139,6 +139,10 @@
         repo_count: 1,
         has_wiki: true,
         unread_count: 0,
+        // 教學課程「⑦ 核准了還沒上線」直接點 [data-tour="proj-release"]，這顆按鈕現在
+        // 依真實的 project.can_release 掛 v-if——示範專案是前端假資料，不走後端，不補這
+        // 欄位的話上課的人若不是有上正式權限的角色，這一步會直接找不到目標。
+        can_release: true,
         e2e_disabled: false,
         odoo_project_name: '鴻久維修',
         service_respondent_name: '鴻久',

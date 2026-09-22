@@ -40,7 +40,7 @@ jest.mock('../pipeline/project-lock', () => ({
 }));
 
 let dbModule, app;
-let userId, projectId, token;
+let userId, projectId, token, companyId, adminToken;
 
 beforeAll(async () => {
   const db = newDb();
@@ -51,17 +51,32 @@ beforeAll(async () => {
 
   const bcrypt = require('bcryptjs');
   const hash = await bcrypt.hash('pass', 4);
+  // 租戶隔離改動後，一般使用者要看得到專案才能打讀端點，所以要有公司並綁定專案（規格 §5.1／§5.2）——
+  // 這樣視覺化檢查是「真的通過」而不是繞過去，這幾支讀端點的測試才還對那道 guard 有鑑別力。
+  const { rows: [company] } = await dbModule.query(
+    "INSERT INTO companies (name, is_active) VALUES ('EnvCo', true) RETURNING id"
+  );
+  companyId = company.id;
   const { rows: [user] } = await dbModule.query(
-    "INSERT INTO users (username, password_hash, display_name) VALUES ('envuser', $1, 'Env') RETURNING id",
-    [hash]
+    "INSERT INTO users (username, password_hash, display_name, company_id) VALUES ('envuser', $1, 'Env', $2) RETURNING id",
+    [hash, companyId]
   );
   userId = user.id;
   token = jwt.sign({ userId }, process.env.JWT_SECRET, { expiresIn: '1h' });
+
+  // 管理端點（setup/stop/delete/external-release）改成平台管理員限定（規格 §2），這些測試的呼叫者要換成平台管理員——
+  // 不是為了繞過視覺化檢查，是這些端點新的合法呼叫者本來就是平台管理員。
+  const { rows: [admin] } = await dbModule.query(
+    "INSERT INTO users (username, password_hash, display_name, role) VALUES ('envadmin', $1, 'EnvAdmin', 'admin') RETURNING id",
+    [hash]
+  );
+  adminToken = jwt.sign({ userId: admin.id }, process.env.JWT_SECRET, { expiresIn: '1h' });
 
   const { rows: [proj] } = await dbModule.query(
     "INSERT INTO projects (name, odoo_version) VALUES ('EnvProj', '17.0') RETURNING id"
   );
   projectId = proj.id;
+  await dbModule.query('INSERT INTO project_companies (project_id, company_id) VALUES ($1,$2)', [projectId, companyId]);
 
   const expressApp = express();
   expressApp.use(express.json());
@@ -79,6 +94,7 @@ beforeEach(() => {
 });
 
 const auth = () => ({ Authorization: `Bearer ${token}` });
+const adminAuth = () => ({ Authorization: `Bearer ${adminToken}` });
 
 test('GET env → idle if no record', async () => {
   const res = await request(app).get(`/api/projects/${projectId}/env`).set(auth());
@@ -114,7 +130,7 @@ test('POST setup → triggers runEnvSetup and returns ok', async () => {
   mockRunEnvSetup.mockResolvedValueOnce(undefined);
   const res = await request(app)
     .post(`/api/projects/${projectId}/env/setup`)
-    .set(auth()).send({});
+    .set(adminAuth()).send({});
   expect(res.status).toBe(200);
   expect(res.body.ok).toBe(true);
   // fire-and-forget so we need to wait a tick
@@ -130,7 +146,7 @@ test('POST setup → 以數字 project_id 持鎖後才 runEnvSetup（字串 key 
   mockRunEnvSetup.mockResolvedValueOnce(undefined);
   const res = await request(app)
     .post(`/api/projects/${projectId}/env/setup`)
-    .set(auth()).send({});
+    .set(adminAuth()).send({});
   expect(res.status).toBe(200);
   await new Promise(r => setTimeout(r, 10));
   expect(mockWithProjectLock).toHaveBeenCalledWith(projectId, expect.any(Function));
@@ -165,7 +181,7 @@ test('POST stop → calls stopEnv', async () => {
   mockStopEnv.mockResolvedValueOnce(undefined);
   const res = await request(app)
     .post(`/api/projects/${projectId}/env/stop`)
-    .set(auth());
+    .set(adminAuth());
   expect(res.status).toBe(200);
   expect(mockStopEnv).toHaveBeenCalledWith(String(projectId));
 });
@@ -175,7 +191,7 @@ test('DELETE env → resets to idle', async () => {
   mockRemoveEnvDir.mockClear();
   const res = await request(app)
     .delete(`/api/projects/${projectId}/env`)
-    .set(auth());
+    .set(adminAuth());
   expect(res.status).toBe(200);
   const { rows: [env] } = await dbModule.query(
     'SELECT status FROM odoo_envs WHERE project_id=$1', [projectId]
@@ -188,6 +204,14 @@ test('DELETE env → resets to idle', async () => {
   expect(mockRemoveDirForce).not.toHaveBeenCalledWith(expect.stringContaining('odoo-envs'));
 });
 
+// 規格 §2／§5.3：測試環境管理對客戶關閉——一般使用者即使看得到這個專案（本檔的 userId 已綁
+// companyId、companyId 已綁 projectId），仍不能碰管理端點。403 而非 404，因為他看得到專案，
+// 只是這個功能本身不開放給他，這與「看不到」是兩種不同的拒絕。
+test('一般使用者看得到專案，仍不能呼叫管理端點（POST setup）→ 403', async () => {
+  const res = await request(app).post(`/api/projects/${projectId}/env/setup`).set(auth()).send({});
+  expect(res.status).toBe(403);
+});
+
 test('401 without token', async () => {
   const res = await request(app).get(`/api/projects/${projectId}/env`);
   expect(res.status).toBe(401);
@@ -195,6 +219,8 @@ test('401 without token', async () => {
 
 // 建一個獨立的 project + odoo_envs 列，供 /env/sso 借名額測試使用（每個 project 各自一列，
 // 避免與檔案前段共用的 projectId 互相干擾）。
+// 一併綁定到本檔的 companyId：這組測試多半用一般使用者的 token 打讀端點，沒有綁定的話
+// 每一支都會先被視覺化檢查擋成 404，測不到它們真正要驗的名額／埠邏輯。
 let _envSsoSeq = 0;
 async function mkEnv(name, opts = {}) {
   _envSsoSeq += 1;
@@ -202,6 +228,7 @@ async function mkEnv(name, opts = {}) {
     "INSERT INTO projects (name, odoo_version) VALUES ($1,'17.0') RETURNING id",
     [`${name}-sso-${_envSsoSeq}`]
   );
+  await dbModule.query('INSERT INTO project_companies (project_id, company_id) VALUES ($1,$2)', [p.id, companyId]);
   await dbModule.query(
     `INSERT INTO odoo_envs (project_id, status, port, url, sso_secret, external_slot, error_msg)
      VALUES ($1,$2,$3,$4,$5,$6,$7)`,
@@ -268,11 +295,14 @@ describe('/env/sso 借對外名額', () => {
     expect(typeof res.body.external_slot).toBe('number');
   });
 
+  // 這支同時打了讀端點（/env/sso 借名額）與管理端點（/env/external/release），視覺化檢查
+  // 不是本支的重點——用平台管理員讓兩段都直接走到各自要驗的名額歸還邏輯；視覺化檢查本身
+  // 已由本檔其他只打讀端點的測試（用一般使用者＋公司綁定）覆蓋。
   test('關閉對外端點歸還名額', async () => {
     process.env.ENV_EXTERNAL_URL_TEMPLATE = 'https://odoo-ai-test-{slot}.example.com';
     const pid = await mkEnv('d', { status: 'running', port: 21002, sso_secret: 'sec' });
-    await request(app).get(`/api/projects/${pid}/env/sso`).set('Authorization', `Bearer ${token}`);
-    const res = await request(app).post(`/api/projects/${pid}/env/external/release`).set('Authorization', `Bearer ${token}`);
+    await request(app).get(`/api/projects/${pid}/env/sso`).set('Authorization', `Bearer ${adminToken}`);
+    const res = await request(app).post(`/api/projects/${pid}/env/external/release`).set('Authorization', `Bearer ${adminToken}`);
     expect(res.status).toBe(200);
     const { rows: [env] } = await dbModule.query('SELECT external_slot, status FROM odoo_envs WHERE project_id=$1', [pid]);
     expect(env.external_slot).toBeNull();
@@ -282,11 +312,12 @@ describe('/env/sso 借對外名額', () => {
   // 意圖：名額載體是 DB 欄位，任何把環境打回 idle 的路徑都必須一併歸還，否則那個 slot 由一個
   // 已經不存在的環境持有——而它不會出現在 nginx conf（RUNNING_SQL 要求 running），
   // 症狀是「名額少一個且查不到誰佔的」，要等 20 分鐘閒置掃描才自己好。
+  // 同上一支：混了讀端點與管理端點，用平台管理員把兩段都打通，讓斷言測的是名額歸還而不是視覺化檢查。
   test('刪除環境一併歸還對外名額', async () => {
     process.env.ENV_EXTERNAL_URL_TEMPLATE = 'https://odoo-ai-test-{slot}.example.com';
     const pid = await mkEnv('i', { status: 'running', port: 21004, sso_secret: 'sec' });
-    await request(app).get(`/api/projects/${pid}/env/sso`).set('Authorization', `Bearer ${token}`);
-    const res = await request(app).delete(`/api/projects/${pid}/env`).set('Authorization', `Bearer ${token}`);
+    await request(app).get(`/api/projects/${pid}/env/sso`).set('Authorization', `Bearer ${adminToken}`);
+    const res = await request(app).delete(`/api/projects/${pid}/env`).set('Authorization', `Bearer ${adminToken}`);
     expect(res.status).toBe(200);
     const { rows: [env] } = await dbModule.query('SELECT external_slot FROM odoo_envs WHERE project_id=$1', [pid]);
     expect(env.external_slot).toBeNull();
@@ -327,7 +358,7 @@ describe('/env/sso 借對外名額', () => {
   // 對外名額有 20 分鐘閒置掃描兜底，內部埠沒有等價的自動回收，所以這個洩漏是永久的。
   test('刪除環境一併歸還內部埠租約', async () => {
     const pid = await mkEnv('k', { status: 'running', port: 21008, sso_secret: 'sec' });
-    const res = await request(app).delete(`/api/projects/${pid}/env`).set('Authorization', `Bearer ${token}`);
+    const res = await request(app).delete(`/api/projects/${pid}/env`).set('Authorization', `Bearer ${adminToken}`);
     expect(res.status).toBe(200);
     const { rows: [env] } = await dbModule.query('SELECT port FROM odoo_envs WHERE project_id=$1', [pid]);
     expect(env.port).toBeNull();
@@ -339,7 +370,7 @@ describe('/env/sso 借對外名額', () => {
   // 會靜默縮水，且從 DB 完全查不出是誰佔的。stopEnv 是唯一真正 stop+rm 容器的路徑。
   test('刪除環境必須真的停掉容器（只清 DB 欄位會留下綁著該埠的孤兒容器）', async () => {
     const pid = await mkEnv('m', { status: 'running', port: 21012, sso_secret: 'sec' });
-    const res = await request(app).delete(`/api/projects/${pid}/env`).set('Authorization', `Bearer ${token}`);
+    const res = await request(app).delete(`/api/projects/${pid}/env`).set('Authorization', `Bearer ${adminToken}`);
     expect(res.status).toBe(200);
     expect(mockStopEnv).toHaveBeenCalledWith(String(pid));
   });
@@ -376,6 +407,11 @@ describe('/env/sso 借對外名額', () => {
     const { rows: [p] } = await dbModule.query(
       "INSERT INTO projects (name, odoo_version) VALUES ('never-built-sso','17.0') RETURNING id"
     );
+    // 這支是從 master 帶進來的（d0785dc3），寫的時候還沒有租戶隔離，所以只建專案沒綁公司。
+    // 呼叫者 token 是 envuser（一般使用者，屬 EnvCo）——沒綁定就是「他看不到這個專案」，
+    // 範圍檢查回 404 是對的行為。這裡補上 mkEnv 本來就會做的那一行，讓這支測回去測它
+    // 原本要測的東西（沒有 odoo_envs 列時回 202 不回 409），而不是變成在測範圍檢查。
+    await dbModule.query('INSERT INTO project_companies (project_id, company_id) VALUES ($1,$2)', [p.id, companyId]);
     mockRunEnvSetup.mockResolvedValueOnce(undefined);
     const res = await request(app).get(`/api/projects/${p.id}/env/sso`).set('Authorization', `Bearer ${token}`);
     expect(res.status).toBe(202);

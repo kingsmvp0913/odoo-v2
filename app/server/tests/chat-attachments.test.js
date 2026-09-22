@@ -24,7 +24,7 @@ jest.mock('../pipeline/chat-to-task', () => ({ draftTaskFromChat: jest.fn() }));
 jest.mock('../notify', () => ({ emitToUser: jest.fn(), emitAll: jest.fn(), setIo: jest.fn() }));
 
 let dbModule, app;
-let userId, projectId, token;
+let userId, projectId, token, coId;
 
 beforeAll(async () => {
   const db = newDb();
@@ -33,8 +33,18 @@ beforeAll(async () => {
   dbModule._setPoolForTesting(new Pool());
   await dbModule.migrate();
 
+  // Task 3 在每支對話端點前面加了 loadProjectForActor 範圍檢查：一般使用者必須綁公司、
+  // 專案必須綁同一家公司才看得到（見 tenant-access.js canSeeProject）。這支測的是
+  // 附件上傳／下載/歸屬，不是多租戶範圍，所以造一家公司、把測試用的專案綁給它、再把使用者的
+  // company_id 指過去，讓新查核照它原本的判斷邏輯放行——使用者仍是一般 user，範圍檢查真的
+  // 有跑；改成平台管理員只會讓檢查被短路，等於沒測到。
+  const { rows: [co] } = await dbModule.query(
+    "INSERT INTO companies (name, is_active, is_internal) VALUES ('ImgCo', true, false) RETURNING id"
+  );
+  coId = co.id;
   const { rows: [user] } = await dbModule.query(
-    "INSERT INTO users (username, password_hash, display_name) VALUES ('imguser', 'x', 'Img') RETURNING id"
+    "INSERT INTO users (username, password_hash, display_name, company_id) VALUES ('imguser', 'x', 'Img', $1) RETURNING id",
+    [coId]
   );
   userId = user.id;
   token = jwt.sign({ userId }, process.env.JWT_SECRET, { expiresIn: '1h' });
@@ -43,6 +53,7 @@ beforeAll(async () => {
     "INSERT INTO projects (name, odoo_version) VALUES ('ImgProj', '17.0') RETURNING id"
   );
   projectId = proj.id;
+  await dbModule.query('INSERT INTO project_companies (project_id, company_id) VALUES ($1,$2)', [projectId, co.id]);
 
   const expressApp = express();
   expressApp.use(express.json());
@@ -228,8 +239,12 @@ test('下載：別人的對話一律 404', async () => {
   const { rows: [att] } = await dbModule.query(
     'SELECT id FROM project_chat_attachments WHERE chat_id = $1 ORDER BY id DESC', [chat.id]
   );
+  // stranger 也要綁進同一家公司：沒公司的話下面這支 404 會在 loadProjectForActor
+  // 那層（看不到專案）就先擋下來，永遠到不了 getOwnedChat（這支真正要驗的「不是這場對話
+  // 的人下載不到」）。綁了同一家公司後，範圍檢查放行、後面的 404 才是歸屬檢查真的擋下的。
   const { rows: [stranger] } = await dbModule.query(
-    "INSERT INTO users (username, password_hash, display_name) VALUES ('stranger', 'x', 'Stranger') RETURNING id"
+    "INSERT INTO users (username, password_hash, display_name, company_id) VALUES ('stranger', 'x', 'Stranger', $1) RETURNING id",
+    [coId]
   );
   const strangerToken = jwt.sign({ userId: stranger.id }, process.env.JWT_SECRET, { expiresIn: '1h' });
   const res = await request(app)
