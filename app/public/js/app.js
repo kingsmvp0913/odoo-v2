@@ -328,6 +328,15 @@ const router = createRouter({
       component: window.UiNextAdminFeedbackView,
       meta: { requiresAuth: true, requiresAdmin: true },
     },
+    {
+      // 平台更版（階段 5）。Legacy 沒有這一頁——更版機制整個是 Next 之後才有的東西，
+      // 沒有 Legacy fallback 元件（比照上面的意見回饋通道）。
+      // ⚠ 三層防線的中間那層：nav 的 v-if 在 UiNextApp.js「更多工具」，後端 403 在
+      // release-routes.js 的 requirePlatformAdmin。少一層就是洞。
+      path: "/admin/release",
+      component: window.UiNextReleaseView,
+      meta: { requiresAuth: true, requiresAdmin: true },
+    },
     { path: "/:pathMatch(.*)*", redirect: "/" },
   ],
 });

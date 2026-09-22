@@ -13,11 +13,25 @@ const readPage = (f) => fs.readFileSync(path.join(pagesDir, f), 'utf8');
 // 從根本消失了**，所以守衛換方向：改成擋住「有人又在個別頁面補一份自己的維護提示」。
 // 那種倒退不會壞掉，只會讓同一件事在不同頁面有不同說法，而且沒有人負責同步。
 describe('維護中提示只能有一個顯示處', () => {
-  test('全站緞帶掛在 shell 上，且吃的是 maintenance 狀態', () => {
+  // 2026-09-22（階段 5 Task 6）：緞帶多了第二個來源——維護時段快到了／正在時段內。
+  // **仍然只有一條緞帶**（裁決：不另造第二套橫幅），條件因此從 v-if="maintenance" 換成
+  // v-if="ribbon" 那個 computed。守衛跟著換到新機制上，意圖一字未改，而且比原本更強：
+  // 除了「條件本身要在」，還釘住那個 computed 真的讀得到 maintenance——少了它，
+  // 夜間改善批次在跑這件事會從畫面上靜默消失，而畫面看起來完全正常。
+  test('全站緞帶掛在 shell 上，且條件吃得到 maintenance 狀態', () => {
     const shell = fs.readFileSync(path.join(uiNextDir, 'UiNextApp.js'), 'utf8');
     expect(shell).toMatch(/class="ui-next-ribbon"/);
     // 只檢查 class 會讓「緞帶永遠顯示／永遠不顯示」也通過——條件本身要在
-    expect(shell).toMatch(/v-if="maintenance"[^>]*class="ui-next-ribbon"/);
+    expect(shell).toMatch(/v-if="ribbon"[^>]*class="ui-next-ribbon"/);
+    // computed 整段切出來（兩端都釘：只釘起點的話 indexOf 回 -1 時會一路切到檔尾，
+    // 守衛會悄悄放大成「整個檔案裡有沒有 maintenance」，那必然是綠的）。
+    const at = shell.indexOf('\n      ribbon() {');
+    expect(`ribbon computed 起點: ${at > -1}`).toBe('ribbon computed 起點: true');
+    const end = shell.indexOf('\n      },', at);
+    expect(`ribbon computed 收尾: ${end > at}`).toBe('ribbon computed 收尾: true');
+    const ribbon = shell.slice(at, end);
+    expect(`ribbon 讀 maintenance: ${/this\.maintenance/.test(ribbon)}`).toBe('ribbon 讀 maintenance: true');
+    expect(`ribbon 讀 releaseNotice: ${/this\.releaseNotice/.test(ribbon)}`).toBe('ribbon 讀 releaseNotice: true');
   });
 
   // ⚠ 掃整個 pages 目錄，不列死檔名：列死清單的守衛，之後新增的頁一律漏掃（rules/testing）。

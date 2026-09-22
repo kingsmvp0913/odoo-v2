@@ -167,12 +167,13 @@ window.AdminHealthCheckView = Vue.defineComponent({
       try {
         const r = await Api.post('admin/fixes/' + fx.id + '/' + action, {});
         if (action === 'apply') {
-          // 擋下時碼已經進主分支了，只差重啟——訊息要說清楚，否則人會以為整件事沒發生而重按
-          showToast(r.restarted
-            ? '已合併並推送，平台重啟中（約 30 秒後重新整理）'
-            : ('已合併並推送，但還有 ' + r.inflight.length + ' 張任務在跑，暫不重啟：'
-               + r.inflight.map(function (t) { return '#' + t.taskId; }).join('、')),
-            r.restarted ? 'success' : 'warning');
+          // 2026-09-22：套用不再重啟平台（重啟搬到維護時段，見 pipeline/release.js），
+          // applyFix 也不再回傳 inflight。原本這裡讀 r.inflight.length，於是**成功的合併**
+          // 會拋 TypeError 被下面的 catch 接住、跳紅字「Cannot read properties of undefined」，
+          // 而且 loadFixes() 不會執行、清單也不刷新——看起來就像合併失敗了。
+          // Legacy 是事故時的退路（?ui=legacy），在那種時候讀到「失敗」而其實成功，代價最大。
+          showToast('已合併並推送到 master。平台還跑著舊碼——要等維護時段，'
+            + '或到新版介面的「更多工具 › 平台更版」按立刻更版，新碼才會真的生效。', 'success');
         } else {
           showToast(action === 'adopt' ? ('已提交到分支 ' + (r.branch || '')) : action === 'push' ? ('已推上 ' + (r.branch || '')) : '已捨棄', 'success');
         }
@@ -308,9 +309,15 @@ window.AdminHealthCheckView = Vue.defineComponent({
                 :disabled="fixBusy === f.id" @click="fixAction(f, 'adopt')">採用（提交到分支）</button>
               <button v-if="fixState(f.id).status === 'adopted'" class="btn btn-primary btn-sm"
                 :disabled="fixBusy === f.id" @click="fixAction(f, 'push')">推上 GitHub</button>
-              <button v-if="['adopted','pushed','merged'].includes(fixState(f.id).status)" class="btn btn-primary btn-sm"
-                :disabled="fixBusy === f.id" @click="fixAction(f, 'apply')">
-                {{ fixState(f.id).status === 'merged' ? '重啟平台（碼已合併）' : '合併並套用（會重啟平台）' }}</button>
+              <!-- 2026-09-22：套用不再重啟平台。原本 merged 狀態下這顆寫「重啟平台（碼已合併）」，
+                   而 applyFix 對 merged 只會直接回傳、什麼都不做——按下去毫無反應，是一顆說謊的按鈕。
+                   碼已合併時改成一句實話（不是按鈕），真正的重啟入口在新版介面的「平台更版」頁
+                   （/admin/release）；Legacy 沒有那一頁的元件，所以這裡不做成連結。 -->
+              <button v-if="['adopted','pushed'].includes(fixState(f.id).status)" class="btn btn-primary btn-sm"
+                :disabled="fixBusy === f.id" @click="fixAction(f, 'apply')">合併並推送（不會重啟平台）</button>
+              <span v-else-if="fixState(f.id).status === 'merged'" style="font-size:var(--fs-sm);color:var(--warning-strong)">
+                碼已合併進 master，平台還跑著舊碼——要等維護時段，或到新版介面的「更多工具 › 平台更版」按立刻更版。
+              </span>
               <button v-if="['ready','adopted'].includes(fixState(f.id).status)" class="btn btn-outline btn-sm"
                 :disabled="fixBusy === f.id" @click="fixAction(f, 'discard')">捨棄</button>
             </div>

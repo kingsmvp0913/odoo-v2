@@ -159,9 +159,12 @@ describe('ui-next 外殼：受限入口都帶著條件（不是裸露的）', ()
   // 2026-09-22 由 9 改為 8：公司管理那顆搬去「管理員設定」的工具卡（/admin/companies），
   // 選單少一顆。數字是從模板重數的（提意見／進行中 Pipeline／用量報表／架構圖／流程圖／
   // 產品化規格／ODOO認證輔助／新手教學），不是把 9 減一。
+  // 2026-09-22 再由 8 改為 9：新增「平台更版」（/admin/release，階段 5 Task 6）。
+  // 同樣是從模板重數的九顆：提意見／進行中 Pipeline／用量報表／架構圖／流程圖／產品化規格／
+  // 平台更版／ODOO認證輔助／新手教學。它掛 v-if="isAdmin"，見下面的 TOOL_BUTTONS。
   test('「更多工具」選單切得到，項目數量沒變', () => {
     expect(toolsMenu).not.toBe('');
-    expect(toolsMenu.match(/<button[^>]*>/g) || []).toHaveLength(8);
+    expect(toolsMenu.match(/<button[^>]*>/g) || []).toHaveLength(9);
   });
 
   // Task 1 之前這三顆是裸露的：一般使用者看得到、按下去必定 403。
@@ -170,6 +173,9 @@ describe('ui-next 外殼：受限入口都帶著條件（不是裸露的）', ()
     ['@click="go(\'/pipeline-flow\')"', 'v-if="isAdmin"'],
     // 考試走公司功能開關，不是 isAdmin——見 app.js /exam-bank 的裁決註解。
     ['@click="go(\'/exam-run\')"', 'v-if="userStore.features.exam"'],
+    // 平台更版（階段 5 Task 6）：三層防線的第一層。這一頁按得到「立刻更版」——
+    // 它會重啟整個平台、砍掉所有人在飛的任務，裸露出去等於把那顆按鈕給所有登入者看。
+    ['@click="go(\'/admin/release\')"', 'v-if="isAdmin"'],
   ];
 
   test.each(TOOL_BUTTONS)('更多工具的 %s 帶著條件', (callsite, cond) => {

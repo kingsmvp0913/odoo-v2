@@ -416,6 +416,11 @@
         // （實查 enterMaintenance 的呼叫端只有它一支），所以文案可以直說「改善執行中」。
         maintenance: false,
         _maintTimer: null,
+        // 維護時段快到了（或正在時段內）而且真的有碼要上。**沿用上面那條緞帶**，不另造橫幅：
+        // 兩件事對使用者是同一件——平台隨時可能重啟、任務會停下來。
+        // 旗標來源是 GET /api/release/notice（一般登入者也讀得到：會被踢下線的是所有人）。
+        releaseNotice: null,
+        _releaseNoticeTimer: null,
         projects: [],
         sidebarChatProjects: [],
         sidebarProjectsError: "",
@@ -459,6 +464,30 @@
       // 改成讀那份每次導覽都會刷新的 UserStore.role，判斷式與 app.js:442 逐字相同。
       isAdmin() {
         return window.UserStore.role === "admin";
+      },
+      /**
+       * 右上角那條緞帶要不要掛、寫什麼。**一條緞帶、兩個來源**，不是兩條橫幅：
+       * 對使用者而言「改善批次在跑」與「維護時段快到了」是同一件事——平台隨時可能重啟、
+       * 任務會停下來。同時成立時以「正在發生的」優先（批次已經在跑了，預告沒有意義）。
+       */
+      ribbon() {
+        if (this.maintenance) {
+          return {
+            text: "改善執行中",
+            title: "已核准的改善提案正在自動改碼、跑測試、審核後合併。期間任務暫停推進，平台可能重啟。",
+          };
+        }
+        const n = this.releaseNotice;
+        if (!n) return null;
+        const at = n.startsAt ? new Date(n.startsAt).toLocaleString("zh-TW", { timeZone: "Asia/Taipei" }) : "";
+        return {
+          text: n.inWindow ? "維護時段進行中" : "維護時段將至",
+          title: (n.inWindow
+            ? "現在在維護時段內，平台會在更新程式時重啟。"
+            : `維護時段 ${at} 開始（${n.label}）。`)
+            + "有已合併、還沒生效的平台程式要更新，屆時平台會重啟一次；"
+            + "正在跑的任務若到時段尾聲還沒結束會被中止，重啟後會自動從同一關重跑。",
+        };
       },
       // 「更多工具」裡那顆 badge 的數字＝還沒上完的課數。
       // TourManager 內部讀的是 reactive 的 doneVersion 與 UserStore.role，
@@ -569,6 +598,10 @@
       // 批次多半是排程在半夜自己起跑的，開著頁面的人不會重新整理。
       this.pollMaintenance();
       this._maintTimer = setInterval(() => this.pollMaintenance(), 15000);
+      // 維護時段的預告以小時計，不必跟著 15 秒的節奏打——每 5 分鐘一次就夠，
+      // 而且這支每次都會查一次待更版清單，頻率拉高等於讓每個開著頁面的人各燒一份查詢。
+      this.pollReleaseNotice();
+      this._releaseNoticeTimer = setInterval(() => this.pollReleaseNotice(), 300000);
       try {
         const [me, projects, sidebarChatProjects] = await Promise.all([
           Api.get("auth/me"),
@@ -665,6 +698,7 @@
       window.removeEventListener("ui-next:sidebar-refresh", this._onSidebarRefresh);
       if (this._sockTimer) { clearInterval(this._sockTimer); this._sockTimer = null; }
       if (this._maintTimer) { clearInterval(this._maintTimer); this._maintTimer = null; }
+      if (this._releaseNoticeTimer) { clearInterval(this._releaseNoticeTimer); this._releaseNoticeTimer = null; }
       if (this._onSidebarTaskUpdated && window._socket) window._socket.off("task:updated", this._onSidebarTaskUpdated);
     },
     // 背景捲動鎖定集中在這裡：這兩個狀態各有好幾處會改（按鈕、⌘K、Escape、
@@ -707,6 +741,13 @@
       async pollMaintenance() {
         try { this.maintenance = !!(await Api.get("maintenance")).maintenance; }
         catch { /* 保留上一個狀態 */ }
+      },
+      // 同上：查不到就保留上一個狀態。這只是預告，少更新一輪沒有代價。
+      async pollReleaseNotice() {
+        try {
+          const n = await Api.get("release/notice");
+          this.releaseNotice = n && n.show ? n : null;
+        } catch { /* 保留上一個狀態 */ }
       },
       // 對話僅在展開專案時才讀，避免登入就對每個專案發請求；標題由既有 Chat API 回傳。
       // 收合不清 cache，所以重複展開同一個專案只會打一次 API。
@@ -1318,7 +1359,7 @@
           <div class="ui-next-login-actions"><button class="ui-next-primary" @click="logout">登出</button></div>
         </section>
       </main>
-      <div v-else class="ui-next-shell" :class="{ 'has-ribbon': maintenance }" data-ui="next">
+      <div v-else class="ui-next-shell" :class="{ 'has-ribbon': !!ribbon }" data-ui="next">
         <a class="ui-next-skip-link" href="#ui-next-main">跳到主要內容</a>
         <!-- 手機頂欄（樣式在 10-mobile.css，桌機 display:none）。選單鈕原本 position:fixed 浮在左上角，
              蓋住每一頁的標題；放進一條佔位的頂欄，內容才會從它下面開始。 -->
@@ -1350,7 +1391,9 @@
           </div>
           <div class="ui-next-bottom">
             <div data-tour="nav-tools" class="ui-next-tools-wrap"><div v-if="toolsOpen" ref="toolsMenu" class="ui-next-account-menu" role="menu" @keydown.down.prevent="moveMenu($event, 1)" @keydown.up.prevent="moveMenu($event, -1)"><button role="menuitem" @click="openFeedback($event)"><ui-next-icon name="chat"/>提意見</button><button role="menuitem" v-if="isAdmin" @click="go('/admin/pipelines')"><ui-next-icon name="flow"/>進行中 Pipeline</button><button role="menuitem" v-if="isAdmin" @click="go('/token-report')"><ui-next-icon name="chart"/>用量報表</button><button role="menuitem" v-if="isAdmin" @click="go('/architecture')"><ui-next-icon name="project"/>架構圖</button><button role="menuitem" v-if="isAdmin" @click="go('/pipeline-flow')"><ui-next-icon name="flow"/>流程圖</button><!-- 公司管理 2026-09-22 搬到「管理員設定」的工具卡（/admin/companies）：它是管理員設定的一員，
-                 留在這裡等於同一類功能有兩個入口。--><button role="menuitem" v-if="isAdmin" @click="go('/saas-specs')"><ui-next-icon name="lock"/>產品化規格</button><!-- 考試是平台管理員限定的例外：2026-09-21 裁決推翻規格 §5.5，改成公司功能開關（features.exam），
+                 留在這裡等於同一類功能有兩個入口。--><button role="menuitem" v-if="isAdmin" @click="go('/saas-specs')"><ui-next-icon name="lock"/>產品化規格</button><!-- 平台更版（階段 5）。掛 isAdmin 是三層防線的第一層（router 的 requiresAdmin 在 app.js /admin/release，
+                 後端 403 在 release-routes.js 的 requirePlatformAdmin）。更版失敗沒有任何東西會通知人，
+                 所以入口必須是常駐的、不能只藏在管理員頁裡。 --><button role="menuitem" v-if="isAdmin" @click="go('/admin/release')"><ui-next-icon name="flow"/>平台更版</button><!-- 考試是平台管理員限定的例外：2026-09-21 裁決推翻規格 §5.5，改成公司功能開關（features.exam），
                  為的是保住 7 個內部同事的考試入口——絕對不要在這裡改回 isAdmin，router 的同名裁決見 app.js /exam-run 註解 --><button role="menuitem" v-if="userStore.features.exam" @click="go('/exam-run')"><ui-next-icon name="book"/>ODOO認證輔助</button><button role="menuitem" @click="openTour"><ui-next-icon name="graduation"/>新手教學<span v-if="tourRemaining" class="tour-launch-badge">{{ tourRemaining }}</span></button></div><button ref="toolsTrigger" data-tour="nav-pipeline" class="ui-next-tools" @click="toggleTools($event)" :aria-expanded="toolsOpen" aria-haspopup="menu"><ui-next-icon name="grid"/>更多工具 <ui-next-icon :name="toolsOpen ? 'chevron-up' : 'chevron-down'"/></button></div>
             <div data-tour="nav-account" class="ui-next-account-wrap"><div v-if="accountOpen" ref="accountMenu" class="ui-next-account-menu" role="menu" @keydown.down.prevent="moveMenu($event, 1)" @keydown.up.prevent="moveMenu($event, -1)"><button role="menuitem" @click="go('/settings')">設定</button><button role="menuitem" v-if="userStore.role === 'company_admin' || isAdmin" @click="go('/company-users')">公司帳號</button><button role="menuitem" @click="toggleTheme">切換深淺色</button><button role="menuitem" v-if="isAdmin" @click="go('/admin')">管理員</button><button role="menuitem" @click="logout">登出</button></div><button ref="accountTrigger" data-tour="nav-settings" class="ui-next-account" @click="toggleAccount($event)" :aria-expanded="accountOpen" aria-haspopup="menu"><svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" class="ui-next-user-icon" aria-hidden="true"><path d="M19 21v-2a4 4 0 0 0-4-4H9a4 4 0 0 0-4 4v2"></path><circle cx="12" cy="7" r="4"></circle></svg><span>帳號與設定</span><ui-next-icon :name="accountOpen ? 'chevron-up' : 'chevron-down'"/></button></div>
             <router-link v-if="isAdmin && usageRows.length" class="ui-next-usage" to="/token-report"><div v-for="row in usageRows" :key="row.label" class="ui-next-usage-row"><span v-if="row.provider==='claude'" class="usage-provider-logo claude" role="img" :aria-label="row.label"><svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 100 100" fill="currentColor"><path d="m19.6 66.5 19.7-11 .3-1-.3-.5h-1l-3.3-.2-11.2-.3L14 53l-9.5-.5-2.4-.5L0 49l.2-1.5 2-1.3 2.9.2 6.3.5 9.5.6 6.9.4L38 49.1h1.6l.2-.7-.5-.4-.4-.4L29 41l-10.6-7-5.6-4.1-3-2-1.5-2-.6-4.2 2.7-3 3.7.3.9.2 3.7 2.9 8 6.1L37 36l1.5 1.2.6-.4.1-.3-.7-1.1L33 25l-6-10.4-2.7-4.3-.7-2.6c-.3-1-.4-2-.4-3l3-4.2L28 0l4.2.6L33.8 2l2.6 6 4.1 9.3L47 29.9l2 3.8 1 3.4.3 1h.7v-.5l.5-7.2 1-8.7 1-11.2.3-3.2 1.6-3.8 3-2L61 2.6l2 2.9-.3 1.8-1.1 7.7L59 27.1l-1.5 8.2h.9l1-1.1 4.1-5.4 6.9-8.6 3-3.5L77 13l2.3-1.8h4.3l3.1 4.7-1.4 4.9-4.4 5.6-3.7 4.7-5.3 7.1-3.2 5.7.3.4h.7l12-2.6 6.4-1.1 7.6-1.3 3.5 1.6.4 1.6-1.4 3.4-8.2 2-9.6 2-14.3 3.3-.2.1.2.3 6.4.6 2.8.2h6.8l12.6 1 3.3 2 1.9 2.7-.3 2-5.1 2.6-6.8-1.6-16-3.8-5.4-1.3h-.8v.4l4.6 4.5 8.3 7.5L89 80.1l.5 2.4-1.3 2-1.4-.2-9.2-7-3.6-3-8-6.8h-.5v.7l1.8 2.7 9.8 14.7.5 4.5-.7 1.4-2.6 1-2.7-.6-5.8-8-6-9-4.7-8.2-.5.4-2.9 30.2-1.3 1.5-3 1.2-2.5-2-1.4-3 1.4-6.2 1.6-8 1.3-6.4 1.2-7.9.7-2.6v-.2H49L43 72l-9 12.3-7.2 7.6-1.7.7-3-1.5.3-2.8L24 86l10-12.8 6-7.9 4-4.6-.1-.5h-.3L17.2 77.4l-4.7.6-2-2 .2-3 1-1 8-5.5Z"></path></svg></span><span v-else class="usage-provider-logo codex" role="img" :aria-label="row.label"><img src="https://images.ctfassets.net/kftzwdyauwt9/77tJ5U1tgxHMZflZ5m4Z24/ace4d8b6ad200d87ebcb69c466344343/Blossom_4k_Icon_1.png?w=1920&amp;q=90&amp;fm=webp" alt=""></span><strong>剩 {{ row.remaining }}%</strong><small>更新 {{ formatUsageUpdated(row.updatedAt) }}<template v-if="row.resetsAt"> · 重置 {{ formatUsageReset(row.resetsAt) }}</template></small><i><em :class="row.level" :style="{ width: row.remaining + '%' }"></em></i></div></router-link>
@@ -1360,9 +1403,8 @@
         <!-- 改善批次跑起來時整個平台會暫停推進任務、而且可能在任何一刻重啟，這是全站狀態。
              原本只有任務頁與任務列表各掛一條橫幅，實測太不明顯。緞帶蓋在右上角、pointer-events
              關掉所以不擋底下的按鈕。role=status 讓螢幕閱讀器在它出現時報一次，不搶焦點。 -->
-        <div v-if="maintenance" class="ui-next-ribbon" role="status" aria-live="polite"
-          title="已核准的改善提案正在自動改碼、跑測試、審核後合併。期間任務暫停推進，平台可能重啟。">
-          <span>改善執行中</span>
+        <div v-if="ribbon" class="ui-next-ribbon" role="status" aria-live="polite" :title="ribbon.title">
+          <span>{{ ribbon.text }}</span>
         </div>
         <!-- 掛在 shell 而不是 aside 內：側欄是 overflow:hidden，放進去會被裁掉一半。 -->
         <ReleaseModal v-if="releaseId" :key="releaseId" :project-id="releaseId" @close="releaseId=null" />

@@ -29,6 +29,7 @@ const { registerRoutes: registerDocsRoutes } = require('./docs-routes');
 const { registerRoutes: registerAiPlatformRoutes } = require('./ai-platform-routes');
 const { registerRoutes: registerCompanyAdminRoutes } = require('./company-admin-routes');
 const { registerRoutes: registerCompanyRoutes } = require('./company-routes');
+const { registerRoutes: registerReleaseRoutes } = require('./release-routes');
 
 const PORT = process.env.PORT || 3939;
 
@@ -188,6 +189,8 @@ function createApp() {
   registerAiPlatformRoutes(app);
   registerCompanyAdminRoutes(app);
   registerCompanyRoutes(app);
+  // 更版頁（階段 5）。Task 6 寫好路由時 index.js 正被 Task 5 佔用，接線由控制者補上。
+  registerReleaseRoutes(app);
 
   // Manual sync / pipeline endpoints
   const { verifyToken } = require('./auth');
