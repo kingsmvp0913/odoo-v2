@@ -4,6 +4,7 @@
     data() { return { cards: [
       { to: "/admin/feedback", title: "改善提案", detail: "使用者意見與 AI 健檢提出的待辦，核准後當晚自動實作" },
       { to: "/admin/settings", title: "系統設定", detail: "Odoo／eService 連線、Teams、Claude 與 Codex 憑證、用量閘門、context7、語意索引" },
+      { to: "/admin/companies", title: "公司管理", detail: "客戶公司的建立、使用期間、功能開關與 GIT 憑證" },
       { to: "/admin/users", title: "使用者管理", detail: "帳號、角色與啟用狀態" },
       { to: "/admin/agents", title: "Agent 管理", detail: "模型、提示詞與執行設定" },
       { to: "/admin/schedules", title: "排程", detail: "背景工作與執行週期" },

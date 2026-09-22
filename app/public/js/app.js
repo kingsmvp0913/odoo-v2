@@ -250,7 +250,9 @@ const router = createRouter({
     {
       // 平台管理員的公司管理頁（3b Task 8）。只有 ui-next 版本，legacy 不需要維護新頁面。
       // 用既有的 requiresAdmin（role==='admin'）就夠——不必為單一頁面另外發明旗標。
-      path: "/companies",
+      // 2026-09-22 從 /companies 搬到 /admin/ 底下：它本來就是管理員設定的一員，
+      // 掛在「更多工具」下等於把同一類功能拆成兩個入口，使用者要記哪個在哪裡。
+      path: "/admin/companies",
       component: window.UiNextCompanyAdminView,
       meta: { requiresAuth: true, requiresAdmin: true },
     },

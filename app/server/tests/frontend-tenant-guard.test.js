@@ -58,7 +58,7 @@ const blockOf = (p) => routeBlocks.find((r) => r.path === p);
 
 describe('route 表：3b 收斂掉的路由旗標', () => {
   // 平台管理員限定（2026-09-21 裁決 D2「兩個都收」＋規格 §5.5）。
-  // 這幾條都不是 /admin 前綴，自動推導看不出來，只能列名。
+  // 前三條都不是 /admin 前綴，自動推導看不出來，只能列名。
   // 與 frontend-admin-route-guard 的 ADMIN_ONLY_OUTSIDE 重疊是刻意的：那支是全站 admin-only
   // 路由的總表，這支是 3b 分租隱藏的完整圖（旗標＋requiresInternal＋nav 條件一起看）。
   // 兩支一起紅，好過兩支都以為對方會管。
@@ -66,7 +66,10 @@ describe('route 表：3b 收斂掉的路由旗標', () => {
     '/architecture',      // 架構圖：平台內部實作細節
     '/pipeline-flow',     // 流程圖：同上
     '/task/:id/terminal', // 終端機：能直接對任務容器下指令
-    '/companies',         // 公司管理（Task 8）：建立／停用客戶公司、設定 GIT 憑證
+    // 公司管理（Task 8）：建立／停用客戶公司、設定 GIT 憑證。
+    // 2026-09-22 從 /companies 搬進 /admin/ 底下，另一支守衛的自動推導從此也涵蓋它；
+    // 這裡保留是因為本清單要的是「3b 藏起來的入口完整圖」，不是「非 /admin 的例外表」。
+    '/admin/companies',
   ];
   // 內部人員限定。用 requiresInternal 而非 requiresAdmin 是刻意的裁決：
   // 鎖成管理員限定會把考試從 7 個內部同事手上收走（見 app.js /exam-bank 的註解）。
@@ -152,9 +155,12 @@ describe('ui-next 外殼：受限入口都帶著條件（不是裸露的）', ()
 
   // 這裡刻意用「剛好幾顆」而不是「至少幾顆」：選單多一顆就是多一個入口，
   // 必須有人親手決定它要不要條件。數字對不上時不要直接改數字——先回答新的那顆該給誰看。
+  // 2026-09-22 由 9 改為 8：公司管理那顆搬去「管理員設定」的工具卡（/admin/companies），
+  // 選單少一顆。數字是從模板重數的（提意見／進行中 Pipeline／用量報表／架構圖／流程圖／
+  // 產品化規格／ODOO認證輔助／新手教學），不是把 9 減一。
   test('「更多工具」選單切得到，項目數量沒變', () => {
     expect(toolsMenu).not.toBe('');
-    expect(toolsMenu.match(/<button[^>]*>/g) || []).toHaveLength(9);
+    expect(toolsMenu.match(/<button[^>]*>/g) || []).toHaveLength(8);
   });
 
   // Task 1 之前這三顆是裸露的：一般使用者看得到、按下去必定 403。

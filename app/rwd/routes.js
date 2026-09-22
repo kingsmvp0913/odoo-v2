@@ -82,7 +82,8 @@ const ROUTES = [
     why: '功能是公司管理員限定（平台管理員也放行，見 app.js guard），但 rwd 門禁的登入 fixture 只有 admin／user 兩顆帳號、沒有 company_admin 帳號與所屬公司；用 admin fixture 登入雖能通過 guard，後端 company-routes.js 對平台管理員（無公司）回 400，畫面只會停在錯誤訊息，看不到真正的列表／新增／停用內容，截圖沒有意義' },
   // 平台管理員的公司管理頁（3b Task 8）。單純 requiresAdmin（role==='admin'），
   // admin fixture 直接放行，不像上面 company-users 那樣卡在「沒有公司」的 400。
-  { key: 'companies', hash: '#/companies', auth: 'admin', covered: true },
+  // key 維持 companies（截圖 baseline 以 key 命名，改名等於整組基準失效）；2026-09-22 只有網址搬家。
+  { key: 'companies', hash: '#/admin/companies', auth: 'admin', covered: true },
   { key: 'styleguide', path: 'styleguide.html', auth: 'none', covered: true, expect: '.sg-wrap' }
 ];
 

@@ -55,7 +55,8 @@ describe('admin 專屬路由都掛了 requiresAdmin', () => {
 describe('非 /admin 前綴的 admin-only 頁面', () => {
   const ADMIN_ONLY_OUTSIDE = [
     '/token-report',  // 用量報表含全平台成本，僅管理員可見
-    '/companies',     // 公司管理（3b Task 8）：建立／停用客戶公司、設定 GIT 憑證，僅平台管理員可見
+    // 公司管理 2026-09-22 從 /companies 搬到 /admin/companies，已落進上面那個
+    // 「/admin 前綴自動推導」的 describe 裡；留在這張白名單會是第二份、而且是錯的定義。
     '/architecture',  // 架構圖（3b Task 1）：平台內部實作細節
     '/pipeline-flow', // 流程圖（3b Task 1）：同上
     '/task/:id/terminal', // 終端機（3b Task 1）：能直接對任務所在容器下指令
