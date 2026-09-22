@@ -209,7 +209,10 @@ describe('ui-next 外殼：受限入口都帶著條件（不是裸露的）', ()
 
   // 登出沒清乾淨＝下一個人登入前畫面短暫沿用上一個使用者的管理員身分，
   // 而這正是所有 isAdmin 條件的資料來源。
-  test('登出時把殼層自算的 isAdmin 也清掉', () => {
+  // 2026-09-22：isAdmin 從 data 改成讀 UserStore.role 的 computed（真因見檔尾那個 describe），
+  // 所以「清掉它」現在等於「清掉 role」。斷言跟著改到新的機制上——意圖一字未改，
+  // 而且比原本更強：原本只保證 logout 指派了一次，現在保證的是那個旗標唯一的資料來源被清空。
+  test('登出時把 isAdmin 的資料來源（UserStore.role）清掉', () => {
     const at = SHELL.indexOf('\n      logout() {');
     expect(at).toBeGreaterThan(-1);
     // 起點有釘、終點沒釘的話，method 的收尾縮排一改，indexOf 就回 -1，
@@ -218,7 +221,7 @@ describe('ui-next 外殼：受限入口都帶著條件（不是裸露的）', ()
     const end = SHELL.indexOf('\n      },', at);
     expect(`logout 收尾錨點: ${end > at}`).toBe('logout 收尾錨點: true');
     const logout = SHELL.slice(at, end);
-    expect(logout).toMatch(/this\.isAdmin\s*=\s*false/);
+    expect(`logout 清 role: ${/window\.UserStore\.role\s*=\s*""/.test(logout)}`).toBe('logout 清 role: true');
   });
 });
 
@@ -596,5 +599,27 @@ describe('個人設定「連線設定」：Odoo／eService 憑證區走 odoo_syn
   test('旗標來源是 UserStore，沒有自己另存一份', () => {
     expect(`Settings.userStore: ${/userStore\(\)\s*\{\s*return window\.UserStore;\s*\}/.test(SETTINGS)}`)
       .toBe('Settings.userStore: true');
+  });
+});
+
+// 2026-09-22 正式環境實測踩到：kingsmvp2 是 role='admin'，登入後所有管理員功能全部消失。
+// 真因是外殼的 isAdmin 曾是 data，只在 mounted() 指派一次，而 mounted() 未登入時直接 return、
+// 外殼又是一次性掛載的根元件——從登入頁用表單登入且沒重新整理，它整場停在 false。
+// 這個坑 role 在 app.js 踩過一次（見 app.js 的 afterEach），3b 把大部分管理員入口都掛到
+// 這個旗標上之後，原本只影響少數項目的潛伏問題放大成「管理員功能全滅」。
+describe('外殼的 isAdmin 必須是讀 UserStore 的 computed，不能是自存一份的 data', () => {
+  test('外殼原始碼讀得到（讀不到的話下面幾條全是假綠）', () => {
+    expect(`UiNextApp: ${SHELL.length > 20000}`).toBe('UiNextApp: true');
+  });
+
+  test('isAdmin 是 computed，判斷式與 app.js 逐字相同', () => {
+    const fn = SHELL.match(/isAdmin\(\)\s*\{\s*return window\.UserStore\.role === "admin";\s*\}/);
+    expect(`isAdmin computed: ${fn !== null}`).toBe('isAdmin computed: true');
+  });
+
+  // 反向釘住真因本身：只要它回到 data 或在任何地方被指派，就是同一個 bug 又長回來了。
+  test('isAdmin 不得是 data，也不得被指派', () => {
+    expect(`data 欄位: ${/\n\s*isAdmin:\s*(false|true)\s*,/.test(SHELL)}`).toBe('data 欄位: false');
+    expect(`被指派: ${/this\.isAdmin\s*=/.test(SHELL)}`).toBe('被指派: false');
   });
 });

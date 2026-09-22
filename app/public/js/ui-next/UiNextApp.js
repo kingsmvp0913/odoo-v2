@@ -428,7 +428,6 @@
         renamingChatId: null,
         renameTitle: "",
         mobileSidebarOpen: false,
-        isAdmin: false,
         userName: "使用者",
         feedbackOpen: false,
         feedbackTrigger: null,
@@ -446,10 +445,17 @@
       };
     },
     computed: {
-      // 讓 template 能讀到 UserStore（features.exam 等）。isAdmin 是既有的殼層自算欄位，
-      // 不搬進來——這裡只補新加的 features 旗標需要的入口。
+      // 讓 template 能讀到 UserStore（features.exam 等）。
       userStore() {
         return window.UserStore;
+      },
+      // isAdmin 原本是 data，只在 mounted() 裡指派一次——而 mounted() 在未登入時直接 return，
+      // 外殼又是一次性掛載的根元件。結果：從登入頁用**表單**登入、沒有重新整理，它整場停在
+      // false，側欄與「更多工具」的每一個 v-if="isAdmin" 全部藏起來（2026-09-22 正式環境實測）。
+      // 這正是 role 當初被搬去 app.js 的 router.afterEach 的同一個坑（見 app.js:441 的註解）；
+      // 改成讀那份每次導覽都會刷新的 UserStore.role，判斷式與 app.js:442 逐字相同。
+      isAdmin() {
+        return window.UserStore.role === "admin";
       },
       // 「更多工具」裡那顆 badge 的數字＝還沒上完的課數。
       // TourManager 內部讀的是 reactive 的 doneVersion 與 UserStore.role，
@@ -569,7 +575,6 @@
             return [];
           }),
         ]);
-        this.isAdmin = me.role === "admin";
         this.userName = me.display_name || me.username || "使用者";
         window.UserStore.role = me.role || "";
         window.UserStore.isInternal = me.is_internal === true;
@@ -1178,9 +1183,8 @@
         window.UserStore.features = {};
         // 理由同上：不清的話，下一個人在 auth/me 回來之前會先看到上一個帳號的「公司帳號已停用」全屏說明。
         window.UserStore.companyUsable = true;
-        // 殼層自己算的 isAdmin（data，非 UserStore）先前漏清——上面五個都清了唯獨它沒清，
-        // 下一個人登入前如果畫面來不及重新整理，會短暫沿用上一個使用者的管理員身分。
-        this.isAdmin = false;
+        // isAdmin 現在是讀 UserStore.role 的 computed（見 computed 區的註解），上面清掉 role
+        // 就等於清掉它，不必也不能在這裡指派。
         SocketManager.disconnectSocket();
         this.$router.push("/login");
       },
