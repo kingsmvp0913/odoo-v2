@@ -3,7 +3,7 @@ const { execFile } = require('child_process');
 const { query } = require('../db');
 const { selfContainerName, measureTests } = require('./finding-fix');
 const { isInWindow, nextWindow } = require('../lib/release-window');
-const { enterMaintenance, leaveMaintenance } = require('./maintenance');
+const { enterMaintenance, leaveMaintenance, isMaintenance } = require('./maintenance');
 
 /**
  * release.js — 「把已經合併的碼真的放上去」。
@@ -331,6 +331,19 @@ async function releaseTick(deps = {}) {
     console.log('[RELEASE] 時段內有 %d 條任務在飛，離時段結束還有 %d 分鐘，這一輪先等它們自己跑完',
       inflight.length, Math.round(msLeft / 60000));
     return { ran: false, reason: 'inflight-waiting', inflight: inflight.length, msLeft, windowKey };
+  }
+
+  // 夜間批次跑過 02:00 時，getInflightInfo() 看不到它——那支不是 pipeline 任務，不進在飛表。
+  // 它正在做的事包含 git merge 與 git push，中途被 docker restart 砍掉的話，push 失敗時
+  // 那段「把合併節點 reset 回去」的補償碼不會執行，master 會留下一顆只有本機看得到的 commit，
+  // 之後每次重試都回 Already up to date 而 push continues to fail——要進 shell 才解得開。
+  // 但它其實留了訊號：批次一開始就 enterMaintenance()，而且跑的期間會定期續期
+  // （nightly-fix.js 的批次起點與續期處）。所以進場前先問一次「現在是不是已經有人在維護中」，
+  // 有的話就是批次還在跑，這一輪讓它。**不標記這一場跑過**，下一分鐘再來問。
+  // 旗標是到期時間不是布林，所以批次若整個死掉，旗標會自己過期，不會把更版永遠卡住。
+  if (await isMaintenance()) {
+    console.log('[RELEASE] 已經有人在維護中（多半是夜間批次還沒收工），這一輪讓它，不重啟');
+    return { ran: false, reason: 'maintenance-busy', windowKey };
   }
 
   _releaseRunning = true;

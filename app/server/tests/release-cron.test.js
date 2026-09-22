@@ -207,12 +207,34 @@ describe('releaseTick 的判斷順序', () => {
     } finally { jest.useRealTimers(); }
   });
 
+
+  // 夜間批次跑過 02:00 時 getInflightInfo() 看不見它（那支不是 pipeline 任務，不進在飛表）。
+  // 它中途被重啟砍掉的話，push 失敗時「把合併節點 reset 回去」的補償碼不會執行，
+  // master 會留下一顆只有本機看得到的 commit，之後每次重試都回 Already up to date。
+  // 批次留的訊號是維護旗標（批次起點 enterMaintenance，跑的期間定期續期）。
+  test('已經有人在維護中（夜間批次還沒收工）→ 讓路、不重啟、且不標記這一場', async () => {
+    await setWindow(WINDOW);
+    await seedPending();
+    await require('../pipeline/maintenance').enterMaintenance(60 * 60 * 1000);
+    const r = await release.releaseTick({ now: SAT_0230() });
+    expect(`讓路: ${r.reason}`).toBe('讓路: maintenance-busy');
+    expect(`重啟了嗎: ${r.ran}`).toBe('重啟了嗎: false');
+    expect(mockExecFile).not.toHaveBeenCalled();
+    // 不標記這一場＝下一分鐘還會再來問，批次收工後這一場仍然跑得成。
+    const { rows } = await dbModule.query('SELECT release_last_window FROM teams_settings WHERE id = 1');
+    expect(`標記了嗎: ${rows[0] && rows[0].release_last_window ? 'yes' : 'no'}`).toBe('標記了嗎: no');
+  });
+
   test('旗標記的是「哪一場」不是「哪一天」：跑過週六那場，週日那場照樣要能上', async () => {
     useFakeTimers();
     try {
       await setWindow(WINDOW);
       await seedPending();
       await release.releaseTick({ now: SAT_0230() });
+      // 正式環境裡週六那場的重啟會把行程帶走，index.js 啟動時會清掉維護旗標。
+      // 測試的重啟是假的、行程沒死，所以要自己補這一步——不補的話旗標會留到週日那場，
+      // 被「已經有人在維護中就讓路」擋下，而那是測試環境才有的假象。
+      await require('../pipeline/maintenance').leaveMaintenance();
       await seedPending();
       const sunday = await release.releaseTick({ now: SUN_0230() });
       expect(`ran: ${sunday.ran} / restarted: ${sunday.restarted}`).toBe('ran: true / restarted: true');
