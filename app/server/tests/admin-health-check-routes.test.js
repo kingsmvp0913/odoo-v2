@@ -16,7 +16,10 @@ const mockDiscard = jest.fn().mockResolvedValue(undefined);
 const mockApply = jest.fn().mockResolvedValue({ branch: 'fix/finding-1-1', merged: true, restarted: true });
 jest.mock('../pipeline/finding-fix', () => ({
   runFix: mockRunFix, adoptFix: mockAdopt, pushFix: mockPush, discardFix: mockDiscard, applyFix: mockApply,
-  classifyChanges: jest.requireActual('../pipeline/finding-fix').classifyChanges
+  classifyChanges: jest.requireActual('../pipeline/finding-fix').classifyChanges,
+  // Task 7：admin-routes.js 新增的 GET /api/admin/feedback/:id/fix 直接重用這支判斷成員來源，
+  // 不是重造一套——mock 整個模組時要帶上真正的實作，否則呼叫到的是 undefined。
+  feedbackIdsOf: jest.requireActual('../pipeline/finding-fix').feedbackIdsOf
 }));
 jest.mock('@anthropic-ai/sdk', () => jest.fn().mockImplementation(() => ({ messages: { create: jest.fn() } })));
 jest.mock('../pipeline/runner', () => ({
@@ -385,13 +388,15 @@ test('同一條提案不並發：兩個工作區同時改同一件事，兩份 d
   expect(second.body.fixId).toBe(first.body.fixId);       // 指回進行中的那一個，不是再開一個
 });
 
-test('GET 回最新一次修正；採用與推送是兩顆分開的按鈕', async () => {
+test('GET 回歷史（新到舊）；採用與推送是兩顆分開的按鈕', async () => {
   const id = await newProposal();
   const started = await request(app).post(`/api/admin/health-check/findings/${id}/fix`)
     .set('Authorization', `Bearer ${adminToken}`).send({});
   const got = await request(app).get(`/api/admin/health-check/findings/${id}/fix`)
     .set('Authorization', `Bearer ${adminToken}`);
-  expect(got.body.id).toBe(started.body.fixId);
+  // Task 7（R6-B）：這支現在回歷史陣列而非單一物件——最新那筆排第一個。
+  expect(Array.isArray(got.body)).toBe(true);
+  expect(got.body[0].id).toBe(started.body.fixId);
 
   const adopt = await request(app).post(`/api/admin/fixes/${started.body.fixId}/adopt`)
     .set('Authorization', `Bearer ${adminToken}`).send({});
@@ -415,6 +420,13 @@ test('修正相關路由一律 admin only', async () => {
   expect((await request(app).post('/api/admin/fixes/1/apply')
     .set('Authorization', `Bearer ${userToken}`).send({})).status).toBe(403);
   expect((await request(app).post('/api/admin/fixes/1/apply')).status).toBe(401);
+  // Task 7：這兩支回的是 diff／review_notes 全站可見的稽核資料，guard 不可比原本鬆。
+  expect((await request(app).get(`/api/admin/health-check/findings/${id}/fix`)).status).toBe(401);
+  expect((await request(app).get(`/api/admin/health-check/findings/${id}/fix`)
+    .set('Authorization', `Bearer ${userToken}`)).status).toBe(403);
+  expect((await request(app).get('/api/admin/feedback/1/fix')).status).toBe(401);
+  expect((await request(app).get('/api/admin/feedback/1/fix')
+    .set('Authorization', `Bearer ${userToken}`)).status).toBe(403);
 });
 
 test('套用只合併不重啟：不再把在飛任務清單傳進去（那道判斷跟著重啟搬去 release.js）', async () => {
@@ -440,7 +452,56 @@ test('取修正詳情要帶 review_notes：漏了前端會靜默不顯示審查�
     .set('Authorization', `Bearer ${adminToken}`);
 
   expect(r.status).toBe(200);
-  expect(r.body.review_notes).toBe('截圖看不出差別，但 diff 只動註解');
+  expect(r.body[0].review_notes).toBe('截圖看不出差別，但 diff 只動註解');
+});
+
+// Task 7（R6-B）：一條提案被退回、重修、才通過合併，事後要能沿著時間軸查「上一次為什麼被退」。
+// 只斷言「回超過一筆」證明不了順序——這裡刻意讓最新一筆的 reject_reason 與最舊一筆不同，
+// 若順序反了或漏排序，這個斷言會抓到。
+test('修正歷史回全部、新到舊排序：查得到被退回的那一次', async () => {
+  const findingId = await newProposal();
+  const { rows: [older] } = await dbModule.query(
+    `INSERT INTO finding_fixes (finding_id, status, reject_reason, created_by) VALUES ($1,'rejected','第一次改法不對',1) RETURNING id`,
+    [findingId]);
+  const { rows: [newer] } = await dbModule.query(
+    `INSERT INTO finding_fixes (finding_id, status, commit_sha, created_by) VALUES ($1,'merged','abc123',1) RETURNING id`,
+    [findingId]);
+
+  const r = await request(app).get(`/api/admin/health-check/findings/${findingId}/fix`)
+    .set('Authorization', `Bearer ${adminToken}`);
+
+  expect(r.status).toBe(200);
+  expect(r.body.map(x => x.id)).toEqual([newer.id, older.id]);   // 新到舊
+  expect(r.body[1].reject_reason).toBe('第一次改法不對');          // 被退回那一次沒有被最新一筆蓋掉
+  expect(r.body[0].commit_sha).toBe('abc123');
+});
+
+// Task 7（R6-B）：意見回饋來源的修正不經 finding_id 反查（feedback.finding_id 要等成功合併才
+// 回填，見 admin-routes.js 該路由旁的說明），而是靠 finding_fixes.members 這個 JSONB——
+// nightly-fix.js 的 memberRefs 寫入的正是 `[{source:'feedback', id}]` 這個形狀，這裡直接照那個
+// 形狀造 fixture，而不是自己發明一套，藉此驗證讀的是同一份既有連結而非另開一條假路。
+test('意見回饋來源的修正可經 feedback id 查到：members 沒對到就查不到，對到就查得到', async () => {
+  const findingId = await newProposal();
+  await dbModule.query(
+    `INSERT INTO finding_fixes (finding_id, status, diff, created_by, members)
+     VALUES ($1,'merged','DIFF-FOR-FEEDBACK-42',1,$2) RETURNING id`,
+    [findingId, JSON.stringify([{ source: 'feedback', id: 42 }])]);
+  // 另一筆意見回饋（id=99）的修正，用來確認上面那筆不會被誤配到別的 feedback id
+  await dbModule.query(
+    `INSERT INTO finding_fixes (finding_id, status, created_by, members)
+     VALUES ($1,'merged',1,$2) RETURNING id`,
+    [findingId, JSON.stringify([{ source: 'feedback', id: 99 }])]);
+
+  const hit = await request(app).get('/api/admin/feedback/42/fix')
+    .set('Authorization', `Bearer ${adminToken}`);
+  expect(hit.status).toBe(200);
+  expect(hit.body).toHaveLength(1);
+  expect(hit.body[0].diff).toBe('DIFF-FOR-FEEDBACK-42');
+
+  const miss = await request(app).get('/api/admin/feedback/999999/fix')
+    .set('Authorization', `Bearer ${adminToken}`);
+  expect(miss.status).toBe(200);
+  expect(miss.body).toEqual([]);
 });
 
 // --- 跨輪的提案清單 ---

@@ -15,7 +15,7 @@ const { runClaude } = require('./pipeline/claude-runner');
 const { listAgents, loadAgent, updateAgent, getLabels, refreshCodexModels } = require('./pipeline/agent-loader');
 const { getInflightInfo, abortTask } = require('./pipeline/runner');
 const { runTaskHealthCheck, runAudit, auditWindowStart } = require('./pipeline/health-check-runner');
-const { runFix, adoptFix, pushFix, discardFix, applyFix } = require('./pipeline/finding-fix');
+const { runFix, adoptFix, pushFix, discardFix, applyFix, feedbackIdsOf } = require('./pipeline/finding-fix');
 const { validateRoleCompany } = require('./lib/tenant-access');
 const { getHealthCheckSchedule, getCronSchedules } = require('./cron');
 const platformBackup = require('./lib/platform-backup');
@@ -868,6 +868,31 @@ function registerRoutes(app) {
     } catch (err) { res.status(500).json({ error: err.message }); }
   });
 
+  // 09-22 R6-B：出口（合併）不擋，事後稽核「這段碼是依據哪段文字改的」就是唯一防線。原本只回
+  // 最新一筆，一條提案被退回、重修、才通過合併的歷程會被最後那筆完全蓋掉——退回理由、上一次
+  // 的 diff 全部查不到。改回傳全部歷史（新到舊），reviewer 才能沿著時間軸回看「上一輪被退回的
+  // 理由是什麼、這一輪改了什麼才過」。
+  //
+  // diff 全文可能很大（一次修正常動好幾個檔案）且歷史筆數理論上無上限，兩者都要設界，否則單一
+  // 一條被反覆退回重修的提案就能讓這支回應肥到前端渲染不動。DIFF_PREVIEW_LEN 只截斷 diff、不動
+  // review_notes／verify_notes（審查與複檢的推理過程通常是自然語言，不會像 diff 一樣隨改動檔數
+  // 線性膨脹，也是唯二的人工稽核材料，砍了等於白做這一關）；列數上限比照本檔別處
+  // （previousRejections）已用過的 LIMIT 200，同一條提案實務上不會被試修到那個量級，設界純屬
+  // 防禦。讀者若真的需要某一列的 diff 全文，該列的 commit_sha 可以 `git show <sha>` 拿到。
+  const DIFF_PREVIEW_LEN = 4000;
+  function trimDiff(row) {
+    const diff = row.diff || '';
+    const truncated = diff.length > DIFF_PREVIEW_LEN;
+    return { ...row, diff: truncated ? diff.slice(0, DIFF_PREVIEW_LEN) : diff, diff_truncated: truncated };
+  }
+  // finding_fixes.members 落地時是 JSONB，但 pg-mem 有時把它回成原始字串（同檔 nightly-fix.js
+  // 的 membersFromRefs 已踩過同一個坑），只認物件陣列會在測試裡靜默變空。
+  function parseMembers(raw) {
+    let list = raw;
+    if (typeof list === 'string') { try { list = JSON.parse(list); } catch { list = null; } }
+    return Array.isArray(list) ? list : [];
+  }
+
   app.get('/api/admin/health-check/findings/:id/fix', auth, async (req, res) => {
     try {
       const { rows } = await query(
@@ -876,8 +901,36 @@ function registerRoutes(app) {
         // verify_notes 同理，是合併前那道複檢（fix-verify）留下的唯一紀錄；它有權直接改碼，
         // 「它到底動了什麼、為什麼」只在這一欄裡。
         `SELECT id, finding_id, status, branch, notes, review_notes, verify_notes, test_result, reject_reason, diff, commit_sha, created_at, finished_at
-           FROM finding_fixes WHERE finding_id=$1 ORDER BY id DESC LIMIT 1`, [req.params.id]);
-      res.json(rows[0] || null);
+           FROM finding_fixes WHERE finding_id=$1 ORDER BY id DESC LIMIT 200`, [req.params.id]);
+      res.json(rows.map(trimDiff));
+    } catch (err) { res.status(500).json({ error: err.message }); }
+  });
+
+  // 意見回饋來源的修正查不到：finding_fixes.finding_id 一定指得到一列 health_check_findings
+  // （nightly-fix.js 的 materializeGroup 一律先造好或沿用這一列，欄位本身 NOT NULL），但
+  // feedback.finding_id 只在修正「成功合併」那一刻才由 markGroupDone 回填；修正還在跑、被退回、
+  // 或失敗的整段期間 feedback.finding_id 是 NULL（db.js 的註解：拿它反查是雞生蛋）。所以「這條
+  // 意見回饋被改過幾次碼、有沒有被退回過」唯一隨時查得到的線索是 finding_fixes.members 這個
+  // JSONB（nightly-fix.js 的 memberRefs 寫入的 [{source,id}]，finding-fix.js 的 feedbackIdsOf
+  // 讀出）——不是另外發明一套連結，是沿用已經在寫的那一份。
+  //
+  // 沒有比照上面直接開一條「同一支路由、:id 兼收 finding 或 feedback」，是因為兩者查法在資料
+  // 層面就不一樣：finding 是對 NOT NULL 外鍵的等值查詢；feedback 得整批掃 members 陣列比對
+  // （沒有索引、也没有反向外鍵）。同一個 :id 參數要嘛得靠呼叫端多帶一個「這是哪張表的鍵」的旗標
+  // 才分得清，要嘛就是猜——兩者都比另開一支語意乾淨的路由更容易踩坑，所以走獨立路徑。
+  // pg-mem 對 JSONB 包含查詢（`@>`）不可靠（同批任務已在別處踩過 `ON CONFLICT…RETURNING` 與
+  // `= ANY($1::int[])` 的坑），這裡沿用 previousRejections 的作法：撈一批列回來，在 JS 裡用
+  // feedbackIdsOf 判斷是否命中，而不是把比對邏輯寫進 SQL。
+  app.get('/api/admin/feedback/:id/fix', auth, async (req, res) => {
+    try {
+      const feedbackId = parseInt(req.params.id, 10);
+      const { rows } = await query(
+        `SELECT id, finding_id, status, branch, notes, review_notes, verify_notes, test_result, reject_reason, diff, commit_sha, created_at, finished_at, members
+           FROM finding_fixes WHERE members IS NOT NULL ORDER BY id DESC LIMIT 500`);
+      const hits = rows
+        .filter(r => feedbackIdsOf(parseMembers(r.members)).includes(feedbackId))
+        .map(({ members, ...rest }) => trimDiff(rest));
+      res.json(hits);
     } catch (err) { res.status(500).json({ error: err.message }); }
   });
 
