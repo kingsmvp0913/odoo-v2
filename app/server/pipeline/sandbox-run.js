@@ -136,11 +136,17 @@ async function prepareSandboxRun({ claudeArgs, opts = {}, profile, projectId }, 
   const auth = { ...(await d.buildClaudeAuthEnv(opts.userId ?? null)) };
   // 呼叫端覆寫仍然保留：平台管理員存新 token 前會先拿候選 token 實跑一次驗證
   //（admin-routes.js 的 saveClaudeToken），那條路要能指定用哪一把。
+  // 兩種憑證都要能被呼叫端覆寫，而且**覆寫時只留那一把**：存檔前的驗證一定要驗到候選憑證
+  // 本人，否則等於沒驗。兩把並存時實際生效的是哪一把取決於官方優先序
+  //（ANTHROPIC_API_KEY > CLAUDE_CODE_OAUTH_TOKEN），會驗到錯的那把而且不會有任何徵狀。
   if (callerEnv.CLAUDE_CODE_OAUTH_TOKEN) {
+    // 平台管理員存新的訂閱 token 前的驗證（admin-routes.js 的 saveClaudeToken）。
     auth.CLAUDE_CODE_OAUTH_TOKEN = callerEnv.CLAUDE_CODE_OAUTH_TOKEN;
-    // 覆寫平台那把時要把客戶那把拿掉，否則兩把並存，實際生效的是哪一把
-    // 取決於官方優先序（ANTHROPIC_API_KEY > CLAUDE_CODE_OAUTH_TOKEN），驗證會驗到錯的那把。
     delete auth.ANTHROPIC_API_KEY;
+  } else if (callerEnv.ANTHROPIC_API_KEY) {
+    // 公司管理員存自家 API key 前的驗證。
+    auth.ANTHROPIC_API_KEY = callerEnv.ANTHROPIC_API_KEY;
+    delete auth.CLAUDE_CODE_OAUTH_TOKEN;
   }
   if (!auth.CLAUDE_CODE_OAUTH_TOKEN && !auth.ANTHROPIC_API_KEY) {
     throw new Error('容器模式需要一把 Anthropic 憑證：平台管理員在設定頁存入 Claude token，或客戶公司設定自己的 API key');
