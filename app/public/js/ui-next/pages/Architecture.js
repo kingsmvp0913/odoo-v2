@@ -1,3 +1,22 @@
+// kind → 框線顏色與圖例文字。原本住在 js/views/Architecture.js，靠 classic script 的全域
+// 共用給本頁；舊版前端退役（2026-09-22）後搬來唯一的使用者這裡。
+// 內容（有哪些系統、怎麼連）仍在 js/architecture-spec.js，本檔只負責「怎麼畫」。
+// kind → 框線顏色。看圖的人第一眼要分辨的是「這東西歸誰管」（見 spec 的 AR_KINDS）。
+// 不用 --danger：客戶現場是「我們只讀不動」，不是「這裡出事了」。
+const AR_KIND_COLOR = {
+  ours:     'var(--primary)',
+  source:   'var(--info)',
+  customer: 'var(--warning)',
+  repo:     'var(--success)'
+};
+
+const AR_KIND_LEGEND = {
+  ours:     '我們自己維運',
+  source:   '公司內部既有系統',
+  customer: '客戶那邊的（只讀）',
+  repo:     '程式碼'
+};
+
   window.UiNextArchitectureView = Vue.defineComponent({
     name: "UiNextArchitectureView",
     data() {

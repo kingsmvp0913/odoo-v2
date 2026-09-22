@@ -11,7 +11,7 @@ description: Use when you need to understand or change the task pipeline — wha
 
 **不要**為了搞懂流程去讀 `server/pipeline/runner.js`＋`verdict-router.js`＋`reject-triage.js`（合計 850 行，轉移邏輯散在各關的 inline 賦值）。spec 就是為了省這一步而存在的。
 
-`app/public/js/views/PipelineFlow.js`（約 930 行）**只負責畫**——泳道排版與曼哈頓路由，跟流程內容無關。要改流程不要動它。
+`app/public/js/ui-next/pages/PipelineFlow.js`（約 900 行）**只負責畫**——泳道排版與曼哈頓路由，跟流程內容無關。要改流程不要動它。
 
 ## 資料形狀
 

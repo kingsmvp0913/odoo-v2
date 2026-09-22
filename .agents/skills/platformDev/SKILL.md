@@ -25,7 +25,8 @@ cd app && npx jest server/tests/<name>.test.js       # 單檔
 - `app/server/cron.js`:背景批次(退回分類、wiki-drift 分類與套用…)。
 
 ## 前端結構（`app/public`）
-- 無框架 vanilla JS：`js/views/*.js` 各頁 view、`js/store.js` 狀態、`js/socket.js`（socket.io 即時事件）、`js/api.js`（fetch 包裝）、`js/dialog.js`／`js/theme.js`。
+- 無框架 vanilla JS：`js/ui-next/pages/*.js` 各頁 view、`js/ui-next/UiNextApp.js` 外殼、`js/store.js` 狀態、`js/socket.js`（socket.io 即時事件）、`js/api.js`（fetch 包裝）、`js/dialog.js`／`js/theme.js`。
+- 舊版前端 `js/views/` 與 `?ui=legacy` 已於 2026-09-22 整個刪除，只剩 ui-next 這一套外殼。
 - 元件外觀對照 `styleguide.html`；新 UI 先看有沒有現成 class。
 - 任務狀態的中文標籤只有 `js/status-labels.js` 一份（`window.STATUS_LABELS`），view 不得自帶——`frontend-status-labels.test.js` 會擋。後端 `runner.js` 的 `STAGE_LABELS` 是「執行歷程」另一套文案，刻意不共用，但**新增流程狀態要兩邊都補**（該測試斷言前端涵蓋後端 key）。
 

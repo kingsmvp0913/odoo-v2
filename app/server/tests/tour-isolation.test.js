@@ -172,11 +172,13 @@ describe('管理員限定課程不對一般使用者出現', () => {
 });
 
 // 示範資料只在教程開著、且看的正好是示範 id 時才接管；漏掉任一個守衛就會把真任務蓋掉。
+// 2026-09-22 舊版前端退役：清單從 js/views/* 換成現在真正在跑的 ui-next 頁面。
+// 檔名寫死是刻意的——這幾頁是「教程會走到、且會被示範資料接管」的那幾頁，不是全部頁面。
 describe('示範資料的接線都有守衛', () => {
   test.each([
-    'js/views/TaskList.js', 'js/views/TaskDetail.js',
-    'js/views/ProjectList.js', 'js/views/ProjectDetail.js',
-    'js/views/WikiView.js', 'js/views/ProjectChat.js', 'js/views/ProjectDbQuery.js'
+    'js/ui-next/pages/TaskList.js', 'js/ui-next/pages/TaskDetail.js',
+    'js/ui-next/pages/ProjectList.js', 'js/ui-next/pages/ProjectDetail.js',
+    'js/ui-next/pages/Wiki.js', 'js/ui-next/pages/ProjectChat.js', 'js/ui-next/pages/Db.js'
   ])('%s 只透過 window.TourDemo 取用（可整支刪除）', (f) => {
     const src = read(f);
     const uses = src.match(/TourDemo/g) || [];
@@ -206,8 +208,9 @@ describe('教程接線', () => {
   });
 
   // 教學改成 UI Next 專用（2026-09-07 使用者裁決）：舊介面的側欄入口已移除。
-  // 這條反向守著——留一顆點下去只會看到全部對不準的教學的鈕，比拿掉更糟。
-  test('舊介面側欄不再有教學入口', () => {
+  // 2026-09-22 舊介面整個退役後，這條剩下的意義是「app.js 不得再長出第二個教學入口」——
+  // 教學的入口單一來源在 ui-next 外殼，app.js 只負責路由。
+  test('app.js 不得自己掛教學入口', () => {
     const src = appJs();
     expect(src).not.toContain('tour-launch');
     expect(src).not.toContain('TourManager.open()');
@@ -218,7 +221,9 @@ describe('教程接線', () => {
     // 比對放寬到引號風格不敏感：app.js 走過 prettier 後字面值從單引號變雙引號，
     // 註冊行原封不動卻讓這條紅——那是格式假紅，會誘人以為 TourHost 真的被拔掉。
     expect(src).toMatch(/app\.component\(\s*['"]TourHost['"]\s*,\s*window\.TourHost\s*\)/);
-    expect(src).toContain('<tour-host />');
+    // 2026-09-22 舊版前端退役：唯一的外殼 template 在 UiNextApp.js，掛載點跟著搬過去。
+    // 註冊在 app.js、掛載在外殼，兩邊都要有——少任一邊教學都是不會出現的（且不報錯）。
+    expect(read('js/ui-next/UiNextApp.js')).toContain('<tour-host />');
   });
 });
 

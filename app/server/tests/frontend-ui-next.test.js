@@ -36,22 +36,17 @@ describe("ui-next 平行介面", () => {
     .match(/'([^']+)'/g).map((s) => s.slice(1, -1));
   const pagesCss = cssOrder.map((n) => read(`css/ui-next-pages/${n}.css`)).join("\n");
 
-  // 版本判準只能有一處。以前 index.html 與 UiNextApp.js 各自讀一次網址，
-  // 改了其中一處就會變成「載了新版資產卻走舊版 View」——畫面壞掉但沒有任何錯誤訊息。
-  test("根介面依單一來源 window.UiVersion 決定，不自己讀網址", () => {
-    expect(uiNext).toContain('window.UiNextEnabled = window.UiVersion === "next"');
-    expect(uiNext).not.toMatch(/query\.get\(["']ui["']\)/);
-    expect(app).toContain(
-      "const RootApp = window.UiNextEnabled ? window.UiNextApp : App;",
-    );
-  });
-
-  // 舊版是轉正式後的退路：兩個方向都要指定得動，預設值集中在一個常數上，
-  // 轉正式就是改那一個字，不必再回頭找散落各處的判斷。
-  test("?ui=legacy 與 ?ui=next 都認得，預設值是單一常數", () => {
-    expect(index).toContain("window.UiVersion = (function ()");
-    expect(index).toMatch(/picked === 'next' \|\| picked === 'legacy' \? picked : DEFAULT_UI/);
-    expect(index).toMatch(/var DEFAULT_UI = '(next|legacy)'/);
+  // 2026-09-22 舊版前端退役：js/views/ 整個刪除，?ui=legacy 的切換機制（window.UiVersion／
+  // window.UiNextEnabled）一併拆掉。這兩條原本守的是「切換判準只能有一處」，對象已不存在。
+  // 換成反向守衛：外殼只能有一套，不得再長出依網址參數分歧的第二條路——那正是當年那個
+  // 「載了新版資產卻走舊版 View」的坑，而它沒有任何錯誤訊息。
+  test("外殼只有一套，沒有任何依網址參數切換介面的分歧", () => {
+    expect(app).toContain("const app = createApp(window.UiNextApp);");
+    for (const [name, src] of [["app.js", app], ["UiNextApp.js", uiNext], ["index.html", index]]) {
+      expect(`${name}: ${/UiNextEnabled|UiVersion/.test(src)}`).toBe(`${name}: false`);
+      expect(`${name}: ${/query\.get\(["']ui["']\)|get\(["']ui["']\)/.test(src)}`).toBe(`${name}: false`);
+    }
+    expect(index).not.toContain("js/views/");
   });
 
   test("新版資產獨立載入，且所有 CSS 規則皆有 ui-next 範圍", () => {
@@ -61,8 +56,7 @@ describe("ui-next 平行介面", () => {
     expect(index).toContain("js/ui-next/UiNextShared.js");
     expect(css).toContain(".ui-next-shell");
     expect(pagesCss).toContain(".ui-next-chat-page");
-    expect(index).toContain("window.UiVersion === 'next'");
-    // CSS 同樣由 ui-next 分支動態寫入，Legacy 不承擔其下載成本。
+    // CSS 由 document.write 依 UI_NEXT_CSS 的順序寫入（順序＝層疊順序，見下面那條）。
     expect(index).toContain("document.write(href.map(");
     // JS 由 ui-next 分支動態寫入，且拆出去的 pages/ 也要在同一批載入——
     // 漏掉的話那些 window.UiNextXxxView 不存在，路由拿到 undefined 元件即白畫面。
@@ -116,7 +110,8 @@ describe("ui-next 平行介面", () => {
     }
   });
 
-  test("Next CSS 的每個 selector 都有專用 scope，不會污染 Legacy DOM", () => {
+  // scope 前綴仍然要守：app.css 是兩邊共用的那份，ui-next 的規則漏了前綴就會蓋到它。
+  test("Next CSS 的每個 selector 都有專用 scope，不會蓋到共用的 app.css", () => {
     const selectors = (source) => {
       const out = [], clean = source
         .replace(/\/\*[\s\S]*?\*\//g, "")
@@ -141,22 +136,21 @@ describe("ui-next 平行介面", () => {
     }
   });
 
-  test("Next 入口使用對應的新版 View", () => {
+  // 2026-09-22 舊版前端退役後，這裡比的不再是三元式的兩邊，而是「路由真的指到新版元件」
+  // 且「那個元件真的被某一支 pages/ 檔定義出來」——後者是關鍵：路由指向不存在的全域
+  // 只會拿到 undefined 元件即白畫面，而那不報錯。
+  test("每個入口都指向對應的新版 View，且該 View 真的有被定義", () => {
     [
-      ["UiNextTokenReportView", "TokenReportView"],
-      ["UiNextPipelineView", "AdminPipelinesView"],
-      ["UiNextProjectChatView", "ProjectChatView"],
-      ["UiNextTaskListView", "TaskListView"],
-      ["UiNextProjectListView", "ProjectListView"],
-      ["UiNextProjectDetailView", "ProjectDetailView"],
-      ["UiNextTaskDetailView", "TaskDetailView"],
-      ["UiNextWikiView", "WikiView"],
-    ].forEach(([next, legacy]) => {
-      expect(app).toMatch(
-        new RegExp(
-          `window\\.UiNextEnabled\\s*\\?\\s*window\\.${next}\\s*:\\s*window\\.${legacy}`,
-        ),
-      );
+      "UiNextTokenReportView",
+      "UiNextPipelineView",
+      "UiNextProjectChatView",
+      "UiNextTaskListView",
+      "UiNextProjectListView",
+      "UiNextProjectDetailView",
+      "UiNextTaskDetailView",
+      "UiNextWikiView",
+    ].forEach((next) => {
+      expect(app).toMatch(new RegExp(`component:\\s*window\\.${next}\\s*,`));
       expect(uiNextPages).toMatch(new RegExp(`name:\\s*["']${next}["']`));
     });
       expect(
@@ -194,7 +188,7 @@ describe("ui-next 平行介面", () => {
 
   test("收件匣與新手教學不進新版日常導覽", () => {
     expect(uiNext).not.toMatch(/go\(["']\/inbox["']\)/);
-    expect(app).toContain('redirect: window.UiNextEnabled ? "/tasks?tab=needs_action" : undefined');
+    expect(app).toContain('redirect: "/tasks?tab=needs_action"');
     expect(uiNextPages).toContain("this.$route.query.tab");
     expect(uiNext).not.toContain('@click="openTour"><ui-next-icon name="book"/>新手教學');
     // 只隱藏入口，保留 TourManager 整合，日後恢復時不需要重建教學功能。
@@ -262,11 +256,12 @@ describe("ui-next 平行介面", () => {
     ].forEach((name) =>
       expect(uiNextPages).toMatch(new RegExp(`name:\\s*["']${name}["']`)),
     );
-    expect(app).toContain("window.UiNextEnabled ? window.UiNextAdminUsersView : window.AdminUsersView");
+    // 路由指向新版元件，且該元件真的有被某一支 pages/ 檔定義出來（指到不存在的全域＝白畫面，不報錯）
+    expect(app).toContain("component: window.UiNextAdminUsersView,");
     expect(uiNextPages).toContain('name: "UiNextAdminUsersView"');
-    expect(app).toContain("window.UiNextEnabled ? window.UiNextDbView : window.ProjectDbQueryView");
+    expect(app).toContain("component: window.UiNextDbView,");
     expect(uiNextPages).toContain('name: "UiNextDbView"');
-    expect(app).toContain("window.UiNextEnabled ? window.UiNextTerminalView : window.TerminalView");
+    expect(app).toContain("component: window.UiNextTerminalView,");
     expect(uiNextPages).toContain('name: "UiNextTerminalView"');
     expect(pagesCss).toContain(".ui-next-wiki-layout");
     expect(pagesCss).toContain(".ui-next-sop-page");
@@ -417,8 +412,10 @@ describe("ui-next 平行介面", () => {
     expect(app).not.toContain("nextTool(");
   });
 
-  test("Next 登入頁是獨立元件，不載入 Legacy Login DOM", () => {
-    expect(app).toContain("window.UiNextEnabled ? window.UiNextLoginView : window.LoginView");
+  // 舊版登入頁（js/views/Login.js）已於 2026-09-22 隨舊版前端刪除。這條留著的意義變成
+  // 「新版登入頁不得靠借用某個外部 View 的 options 過活」——那種寫法在來源被刪掉時才會爆。
+  test("Next 登入頁是獨立元件，不借用外部 View 的 options", () => {
+    expect(app).toContain("component: window.UiNextLoginView,");
     expect(uiNextPages).toContain('name: "UiNextLoginView"');
     expect(uiNextPages).not.toMatch(/window\.LoginView\.(?:data|computed|watch|methods|created|mounted|beforeUnmount)/);
     expect(css).toContain(".ui-next-login{");

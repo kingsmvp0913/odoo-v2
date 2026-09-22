@@ -8,7 +8,8 @@
 const fs = require('fs');
 const path = require('path');
 
-const view = fs.readFileSync(path.join(__dirname, '../../public/js/views/TaskDetail.js'), 'utf8');
+// 2026-09-22 舊版前端退役：畫面端的對象從 js/views/TaskDetail.js 改成現在唯一在跑的 ui-next 版。
+const view = fs.readFileSync(path.join(__dirname, '../../public/js/ui-next/pages/TaskDetail.js'), 'utf8');
 const contract = fs.readFileSync(path.join(__dirname, '../pipeline/questions-contract.md'), 'utf8');
 const askingWell = fs.readFileSync(path.join(__dirname, '../pipeline/asking-well.md'), 'utf8');
 
@@ -33,30 +34,36 @@ describe('題目的「選錯代價」走畫面標記，不走題目文字', () =
     expect(askingWell).not.toContain('這裡若選錯，要退回重寫規格與程式，請多看一眼');
   });
 
-  // ② 畫面端：有渲染，而且掛在題目標題列（跟「選填」同一列），不是另起一行又佔版面
-  test('題目標題列會渲染 impact=costly 的標記', () => {
-    expect(view).toMatch(/v-if="q\.impact === 'costly'"/);
-    const header = view.slice(view.indexOf('<div class="td-q-header">'));
-    expect(header.slice(0, header.indexOf('</div>'))).toMatch(/q\.impact === 'costly'/);
+  // ② 畫面端：有渲染，而且緊貼題目那一行（跟「選填」同一段），不是另起一行又佔版面。
+  // ⚠ 這幾條的字面值跟著 ui-next 的寫法走（無空格的 ===、ui-next-* class），
+  //    不是舊版那套 `q.impact === 'costly'` + `pill`——改寫法時要連這裡一起改。
+  const TAG = /<span v-if="q\.impact==='costly'"[\s\S]{0,240}?>([^<]+)<\/span>/;
+
+  test('題目那一行會渲染 impact=costly 的標記', () => {
+    expect(view).toMatch(/v-if="q\.impact==='costly'"/);
+    // 題目文字（<b>…{{ q.text }}…</b>）與標記之間不得夾進別的區塊，否則就是另起一行了
+    const between = view.slice(view.indexOf('{{ index+1 }}. {{ q.text }}'), view.search(/<span v-if="q\.impact==='costly'"/));
+    expect(between).not.toMatch(/<div\b/);
   });
 
   // 兩種都畫＝每題都有標記＝等於沒標。只有需要多看一眼的那種才出現，才有鑑別力。
   test('reversible 不渲染任何標記', () => {
-    expect(view).not.toContain("q.impact === 'reversible'");
+    expect(view).not.toContain("q.impact==='reversible'");
   });
 
-  // 深色模式硬規則：套用既有 pill class，不得 inline 寫死淺色背景（寫死＝深色模式下文字翻白隱形）
-  test('標記套用既有 pill 樣式，沒有 inline 寫死顏色', () => {
-    const tag = view.match(/<span v-if="q\.impact === 'costly'"[\s\S]{0,240}?<\/span>/);
+  // 深色模式硬規則：套用既有的 ui-next 語意 class，不得 inline 寫死顏色
+  //（寫死＝深色模式下文字翻白隱形，這是本 repo 的硬規則）。
+  test('標記套用既有語意樣式，沒有 inline 寫死顏色', () => {
+    const tag = view.match(TAG);
     expect(tag).not.toBeNull();
-    expect(tag[0]).toMatch(/class="pill pill-\w+"/);
+    expect(tag[0]).toMatch(/class="ui-next-[\w-]+"/);
     expect(tag[0]).not.toMatch(/background\s*:\s*#/);
     expect(tag[0]).not.toMatch(/color\s*:\s*#/);
   });
 
   // 標記本身要短。做這件事的理由就是嫌文字長，標記再長回去就自我否定了。
   test('標記文字維持精簡（含符號 8 字以內）', () => {
-    const tag = view.match(/<span v-if="q\.impact === 'costly'"[\s\S]{0,240}?>([^<]+)<\/span>/);
+    const tag = view.match(TAG);
     expect(tag).not.toBeNull();
     expect(tag[1].trim().length).toBeLessThanOrEqual(8);
   });

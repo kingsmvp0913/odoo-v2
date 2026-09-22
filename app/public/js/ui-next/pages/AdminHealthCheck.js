@@ -1,3 +1,32 @@
+// 嚴重度／根因層／節奏的顯示對照表。原本住在 js/views/AdminHealthCheck.js，靠 classic script
+// 的全域共用給本頁；舊版前端退役（2026-09-22）後搬來唯一的使用者這裡。
+// 配色一律走 app.css CSS 變數／dark-aware，禁寫死淺色底。
+// 四階顏色刻意拉開：low 與 medium 原本都吃 --warning，畫面上是同一個黃色，等於分級只有三階，
+// 而「哪幾條可以放著不管」正好卡在這兩階之間。medium 改用比黃更重一階的橘（--warning-strong）。
+const HC_SEV = {
+  ok:     { label: '正常', color: 'var(--success, #059669)' },
+  low:    { label: '輕微', color: 'var(--warning, #d97706)' },
+  medium: { label: '中等', color: 'var(--warning-strong)' },
+  high:   { label: '嚴重', color: 'var(--error)' },
+  // 零樣本：後端依 token.calls 覆寫，避免「沒被呼叫過」在畫面上長得跟「檢查過沒問題」一樣
+  'n/a':  { label: '未取樣', color: '#64748b' },
+  error:  { label: '健檢失敗', color: '#6b7280' }
+};
+
+// 根因層：決定這條該走哪個出口。提示詞可解的才有「帶入編輯器」，其餘要走開單修碼／修環境。
+const HC_LAYER = {
+  prompt:        { label: '提示詞', color: 'var(--primary)' },
+  platform:      { label: '平台程式', color: 'var(--error)' },
+  env:           { label: '環境', color: 'var(--warning, #d97706)' },
+  observability: { label: '觀測缺口', color: '#64748b' }
+};
+
+// 後端 severity_rank（-1 未取樣 … 3 嚴重）反查回 HC_SEV 的鍵；索引＝rank + 1。
+const SEV_BY_RANK = ['n/a', 'ok', 'low', 'medium', 'high'];
+
+// 健檢節奏：daily 是增量視窗（多數列），只有大健檢才標出來——每一列都掛個「（日）」等於沒標。
+const HC_CADENCE = { weekly: '（週）', monthly: '（月）' };
+
   // 這一頁只做一件事：當健檢的 log 看。
   //
   // 它原本是「提案管理台」——七張提案卡片，每張掛著擋下／修這條／四顆裁決鈕＋裁決理由輸入框，

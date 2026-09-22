@@ -3,9 +3,9 @@
 // `invalid input syntax for type integer: "demo"`。
 // 使用者看到的症狀是：一進 /projects/demo 的課，右上角就跳「無法載入專案對話」。
 //
-// TourDemo.chats() 這份假資料一直都在，漏的是接線。tour-isolation.test.js 只掃舊的 js/views/*，
-// UI Next 轉正式之後那份清單就守不到現在真正在跑的畫面了，所以這支直接把 method 切出來跑，
-// 斷言「demo 時一次 API 都不許打」——字串掃描擋不住「有 TourDemo 但漏接某一條路徑」。
+// TourDemo.chats() 這份假資料一直都在，漏的是接線。tour-isolation.test.js 只做字串掃描
+// （「有沒有經過 window.TourDemo」），擋不住「有 TourDemo 但漏接某一條路徑」，所以這支直接把
+// method 切出來跑，斷言「demo 時一次 API 都不許打」。
 const fs = require('fs');
 const path = require('path');
 

@@ -251,19 +251,22 @@ describe('這一頁真的接進站台了', () => {
 
   // spec 是純資料檔，但 view 靠 <script> 全域載入——漏加 script tag 的症狀是整頁白畫面，
   // 而 jest 這邊 require 得到、照樣全綠。
-  test('index.html 有載入 architecture-spec.js 且排在 Architecture.js 之前', () => {
+  // 2026-09-22 舊版前端退役後，View 改由 index.html 那段 UI_NEXT_PAGES 的 document.write 載入，
+  // 所以比的是「spec 的 script 標籤排在那段動態載入之前」，不再是某個寫死的 script src。
+  test('index.html 有載入 architecture-spec.js 且排在 ui-next 的 pages/ 之前', () => {
     const html = read('public/index.html');
     const spec = html.indexOf('js/architecture-spec.js');
-    const view = html.indexOf('js/views/Architecture.js');
+    const pages = html.indexOf("js/ui-next/pages/");
     expect(spec).toBeGreaterThan(-1);
-    expect(view).toBeGreaterThan(-1);
-    expect(spec).toBeLessThan(view);
+    expect(pages).toBeGreaterThan(-1);
+    expect(spec).toBeLessThan(pages);
+    expect(html).toContain("'Architecture'");   // 那份清單真的有這一頁，否則上一條比了個空
   });
 
   // 語法錯誤在 view 的後果是整頁白畫面（Vue 元件根本註冊不上），靜態比對抓不到。
   test('Architecture.js 語法有效', () => {
     const vm = require('vm');
-    const src = read('public/js/views/Architecture.js');
+    const src = read('public/js/ui-next/pages/Architecture.js');
     expect(() => new vm.Script(src, { filename: 'Architecture.js' })).not.toThrow();
   });
 
@@ -271,7 +274,7 @@ describe('這一頁真的接進站台了', () => {
   // view 兩張表沒補，症狀是框線變灰、圖例那格印出 undefined——不報錯，也不會有人在改
   // spec 的當下想到要回頭看 view。
   test('view 的顏色與圖例涵蓋所有 kind', () => {
-    const src = read('public/js/views/Architecture.js');
+    const src = read('public/js/ui-next/pages/Architecture.js');
     const cut = (name) => {
       const from = src.indexOf('const ' + name);
       return src.slice(from, src.indexOf('};', from));
@@ -281,23 +284,23 @@ describe('這一頁真的接進站台了', () => {
     expect(AR_KINDS.filter((k) => !legend.includes(k + ':'))).toEqual([]);
   });
 
-  test('app.js 有註冊路由與側欄入口', () => {
+  test('app.js 有註冊路由，外殼有入口', () => {
     const app = read('public/js/app.js');
     expect(app).toMatch(/path:\s*['"]\/architecture['"]/);   // 引號風格不敏感（prettier 會換）
     expect(app).toContain('ArchitectureView');
-    expect(app).toContain("to=\"/architecture\"");
+    expect(read('public/js/ui-next/UiNextApp.js')).toContain("go('/architecture')");
   });
 
-  // 側欄順序是使用者明確要的：地景圖與流程圖是「查資料」的兩頁，排在所有操作項目之後。
+  // 順序是使用者明確要的：地景圖與流程圖是「查資料」的兩頁，排在所有操作項目之後。
   // 這種順序沒有任何程式依賴，改版時最容易被順手挪走。
-  test('側欄順序：管理員 → 架構圖 → 流程圖', () => {
-    const app = read('public/js/app.js');
-    const admin = app.indexOf('to="/admin" custom');
-    const arch = app.indexOf('to="/architecture" custom');
-    const flow = app.indexOf('to="/pipeline-flow" custom');
-    expect(admin).toBeGreaterThan(-1);
-    expect(admin).toBeLessThan(arch);
-    expect(arch).toBeLessThan(flow);
+  // 2026-09-22 舊版前端退役後，入口只剩 ui-next 外殼「更多工具」選單那一份。
+  test('入口順序：進行中 Pipeline → 用量報表 → 架構圖 → 流程圖', () => {
+    const shell = read('public/js/ui-next/UiNextApp.js');
+    const at = (s) => shell.indexOf(s);
+    expect(at("go('/admin/pipelines')")).toBeGreaterThan(-1);
+    expect(at("go('/admin/pipelines')")).toBeLessThan(at("go('/token-report')"));
+    expect(at("go('/token-report')")).toBeLessThan(at("go('/architecture')"));
+    expect(at("go('/architecture')")).toBeLessThan(at("go('/pipeline-flow')"));
   });
 
   // 沒進門禁的頁不會有基線截圖，之後任何改動都不會被比對到——而那完全沒有訊號。

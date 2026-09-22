@@ -30,7 +30,7 @@ test('前端不得把內部埠印在畫面上（內部埠不對外，印了會�
 // 「改範圍要請維運 publish／放行 NAT」是 port 模式時代的遺物，而那個畫面正是上線步驟要求操作員
 // 把上限從 21012 拉到 21019 的地方——留著會讓他以為得先等 IT 放行，直接卡住上線。
 test('埠池設定頁不得再要求 publish 埠段／放行 NAT（內部埠已不對外）', () => {
-  const src = fs.readFileSync(path.join(VIEW_DIR, 'views/AdminPortPool.js'), 'utf8');
+  const src = fs.readFileSync(path.join(VIEW_DIR, 'ui-next/pages/AdminPortPool.js'), 'utf8');
   expect(src).not.toMatch(/publish/i);
   expect(src).not.toMatch(/NAT/);
 });

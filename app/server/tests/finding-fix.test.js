@@ -8,7 +8,7 @@ const line = (code, file) => `${code} ${file}`;
 test('可改範圍：後端、前端、各關提示詞', () => {
   const { violations } = classifyChanges([
     line(' M', 'app/server/pipeline/runner.js'),
-    line(' M', 'app/public/js/views/TaskDetail.js'),
+    line(' M', 'app/public/js/ui-next/pages/TaskDetail.js'),
     line(' M', '.claude/agents/coding-project.md'),
   ].join('\n'));
   expect(violations).toEqual([]);

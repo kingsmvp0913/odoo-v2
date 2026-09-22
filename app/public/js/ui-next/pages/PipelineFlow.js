@@ -1,3 +1,37 @@
+// 匯流排設定與 kind → 框線顏色。原本住在 js/views/PipelineFlow.js，靠 classic script 的全域
+// 共用給本頁；舊版前端退役（2026-09-22）後搬來唯一的使用者這裡。
+// 泳道／節點／連線的內容仍在 js/pipeline-spec.js，本檔只負責「怎麼畫」。
+// 「失敗待確認」刻意**不立**匯流排，雖然那樣交叉會少 1（6→5）：它的兩條來源都在任務主線，
+// 主幹卻只能擺到人工介入泳道旁，兩條接頭因此各變成 340px 的橫跨線，250px+ 長線 5→7、
+// 總線長 +534px。**交叉數不是唯一指標**——只看它就會選到這種「數字漂亮、看起來更亂」的解。
+//
+// exclude 各有理由：branch／spectour 是主線入口不是退回；分診與開發同一列、規格層重做只差
+// 一列，直接連過去就好——併進匯流排反而要先往下繞到間隙、再橫 364px 過來（原則 3：不要亂彎）。
+const PF_BUSES = [
+  // 開發的匯流排放**左側**：右邊已經擠了規格層重做、分診來的線；左邊只有 Git 對應線。
+  // 待你裁決只在開發的下一列，從自己頂部往上、往左就接到了——併進匯流排反而要先往下繞到
+  // 間隙、再橫 372px 到左側，沿路穿過主線與 QA→失敗待確認（原則 3：能直連就別繞）。
+  { target: 'coding', side: 'left', exclude: ['branch', 'spectour', 'respec', 'triage', 'clarify'] },
+  // 分診的走**正下方**：匯入它的三關全在它下面，從側邊進來的話那三條接頭得先橫到分診旁邊，
+  // 正好和分診送出去的線打叉。
+  { target: 'triage', side: 'bottom', exclude: [] }
+];
+
+// kind → 框線顏色。泳道讓出了語意軸之後，「這是什麼性質的關」全靠這裡表達。
+const PF_KIND_COLOR = {
+  start:  'var(--success)',
+  end:    'var(--success)',
+  agent:  'var(--primary)',
+  // 不用 --border-strong：它是給「分隔線」用的，當框線在兩種主題下都淡到看不出有框，
+  // 而系統自動關卡（建分支／併入測試／部署）是主線的一部分，不該看起來像被停用。
+  sys:    'var(--text-muted)',
+  gate:   'var(--warning)',
+  stop:   'var(--danger)',
+  git:    'var(--info)',
+  inline: 'var(--primary)',
+  ext:    'var(--text-muted)'
+};
+
   window.UiNextPipelineFlowView = Vue.defineComponent({
     name: "UiNextPipelineFlowView",
     data() {

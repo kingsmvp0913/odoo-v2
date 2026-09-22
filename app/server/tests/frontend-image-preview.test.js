@@ -5,7 +5,7 @@
 // 而剛貼上還沒送出的縮圖只有 34～54px，點了完全沒反應。
 //
 // 這支守的是「統一」這件事本身：跳窗只能有一個實作、每個縮圖都接到它、
-// 而且兩套 shell 都掛得起來（漏掛的症狀是點圖沒反應，沒有任何錯誤訊息）。
+// 而且外殼真的掛得起來（漏掛的症狀是點圖沒反應，沒有任何錯誤訊息）。
 const fs = require('fs');
 const path = require('path');
 
@@ -29,8 +29,9 @@ describe('圖片放大跳窗：只有一套，而且真的接得起來', () => {
     expect(indexHtml).toContain('js/image-preview.js');
   });
 
-  test('兩套 shell 都掛了 host（只掛一邊＝另一邊點圖沒反應）', () => {
-    expect(appJs).toContain('<image-preview-host />');
+  // 2026-09-22 舊版前端退役：外殼只剩 ui-next 一套，掛載點只剩 UiNextApp.js 的 template。
+  // 註冊（app.js）與掛載（外殼 template）仍是兩邊，少任一邊都是「點圖沒反應」。
+  test('外殼掛了 host，且元件有註冊（少任一邊＝點圖沒反應）', () => {
     expect(shell).toContain('<image-preview-host />');
     expect(appJs).toContain('app.component("ImagePreviewHost", window.ImagePreviewHost)');
     // template 直接叫 previewImage(...) 靠的是這一行；少了它，十幾處縮圖全部靜默失效

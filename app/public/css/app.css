@@ -977,21 +977,7 @@ body { zoom: var(--ui-zoom); height: calc(100vh / var(--ui-zoom)); }
 /* 分頁列 */
 .arj-pagination-row { display:flex;align-items:center;gap:var(--space-3);margin-top:var(--space-3) }
 
-/* ── js/views/ProjectList.js ── */
-/* 新增專案表單：兩欄 grid */
-.proj-form-grid { display:grid;grid-template-columns:1fr 1fr;gap:var(--space-3);margin-bottom:var(--space-3) }
-/* 新增專案表單：送出/取消按鈕列 */
-.proj-form-actions { display:flex;gap:var(--space-2) }
-/* 搜尋框寬度上限 */
-.proj-search-input { max-width:320px }
-/* 專案卡 skeleton 載入態：標籤列 */
-.proj-skeleton-row { margin-top:10px;display:flex;gap:6px }
-/* 專案卡：操作按鈕列（Chat／測試區／上正式…） */
-.proj-card-actions { margin-top:10px;display:flex;gap:6px;flex-wrap:wrap }
-/* 專案卡：右側愛心／刪除圖示列 */
-.proj-card-icons { display:flex;gap:var(--space-1);flex-shrink:0;align-self:flex-start }
-
-/* ── js/views/AdminClassifySamples.js ── */
+/* ── js/ui-next/pages/AdminClassifySamples.js ── */
 /* 頁面內容寬度上限 */
 .classify-wrap { max-width:1000px }
 /* 頂部工具列：說明文字 + 天數選擇器 */

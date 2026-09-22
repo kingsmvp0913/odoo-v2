@@ -25,7 +25,7 @@
 //       字面沒變，本檔照樣全綠。同理 `userStore.features.exam` 若永遠是 undefined，
 //       入口等於被藏死，這裡也看不出來。
 //    3. route meta 對、但 guard 本體被短路（beforeEach 開頭插一行 `return true`）也是綠的。
-//    4. legacy 前端（app/public/js/views/）完全不在掃描範圍。
+//    4. legacy 前端（app/public/js/views/）已於 2026-09-22 整個刪除。
 //    5. 最重要的一條：前端隱藏只是體驗層，擋不住任何人直接打 API。
 //       真正的防線是後端 403（tenant-route-guard.test.js、company-routes.test.js 那一批）。
 //       這支全綠只代表「該藏的還藏著」，不代表「資料擋得住」。

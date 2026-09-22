@@ -1,4 +1,7 @@
 (function () {
+  // 哪些狀態底下「回答」才送得出去。原本住在 js/views/TaskDetail.js，靠 classic script 的全域
+  // 共用給本頁；舊版前端退役（2026-09-22）後搬來唯一的使用者這裡。
+  const ANSWER_ALLOWED = ['confirm_pending', 'clarify_pending'];
   // 執行歷程每批筆數。⚠ 不能太小：跳窗是固定高度，首批要撐得出捲軸，否則「捲到頂載更早」
   // 永遠觸發不了（實測首批 10 筆時 1796 筆的任務只看得到 10 筆）。
   const EVENTS_PAGE = 30;

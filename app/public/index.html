@@ -7,35 +7,21 @@
   <link rel="icon" href="favicon.svg" type="image/svg+xml" />
   <link rel="stylesheet" href="css/app.css" />
   <script>
-    // 選哪一套介面的唯一判準。這段必須排在所有會依版本分歧的東西之前（CSS、UiNextApp.js、app.js）。
+    // ⚠ 這個陣列的順序就是層疊順序，**不可以重排也不可以按字母排序**。
+    // 同權重的規則後者贏，而 09-later-patches 整份都是靠排在最後才生效的補丁。
+    // 換順序的症狀是樣式默默變掉，沒有錯誤、沒有測試會叫，只有人眼看得出來。
     //
-    // 轉正式＝把 DEFAULT_UI 改成 'next' 這一個字，舊版立刻變成 ?ui=legacy 的退路，
-    // 兩邊的碼都留著、出事隨時可退。網址參數永遠優先於預設值，兩個方向都指定得動。
-    //
-    // ⚠ app/public 是靜態直接服務的：改這個值不需要重啟也不需要 push，存檔就對所有人生效。
-    window.UiVersion = (function () {
-      var DEFAULT_UI = 'next';
-      var picked = new URLSearchParams(location.search).get('ui');
-      return picked === 'next' || picked === 'legacy' ? picked : DEFAULT_UI;
-    })();
-  </script>
-  <script>
-    // Next assets 只在實際會用到時載入，另一邊不承擔其下載與 selector 成本。
-    if (window.UiVersion === 'next') {
-      // ⚠ 這個陣列的順序就是層疊順序，**不可以重排也不可以按字母排序**。
-      // 同權重的規則後者贏，而 09-later-patches 整份都是靠排在最後才生效的補丁。
-      // 換順序的症狀是樣式默默變掉，沒有錯誤、沒有測試會叫，只有人眼看得出來。
-      var UI_NEXT_CSS = [
-        '01-base', '02-project-detail', '03-task-detail', '04-settings',
-        '05-project-list', '06-chat', '07-admin', '08-report',
-        '09-later-patches', '10-mobile'
-      ];
-      var href = ['css/ui-next.css']
-        .concat(UI_NEXT_CSS.map(function (n) { return 'css/ui-next-pages/' + n + '.css'; }));
-      document.write(href.map(function (h) {
-        return '<link rel="stylesheet" href="' + h + '?v=20260909a">';
-      }).join(''));
-    }
+    // ⚠ app/public 是靜態直接服務的：改這裡不需要重啟也不需要 push，存檔就對所有人生效。
+    var UI_NEXT_CSS = [
+      '01-base', '02-project-detail', '03-task-detail', '04-settings',
+      '05-project-list', '06-chat', '07-admin', '08-report',
+      '09-later-patches', '10-mobile'
+    ];
+    var href = ['css/ui-next.css']
+      .concat(UI_NEXT_CSS.map(function (n) { return 'css/ui-next-pages/' + n + '.css'; }));
+    document.write(href.map(function (h) {
+      return '<link rel="stylesheet" href="' + h + '?v=20260909a">';
+    }).join(''));
   </script>
   <link rel="stylesheet" href="css/vendor/xterm.css" />
   <link rel="stylesheet" href="css/tour.css" />
@@ -58,7 +44,6 @@
   <script src="js/api.js"></script>
   <script src="js/env-sso.js"></script>
   <script src="js/store.js"></script>
-  <script src="js/views/SearchableSelect.js"></script>
   <script src="js/dialog.js"></script>
   <script src="js/image-preview.js"></script>
   <script src="js/skeleton.js"></script>
@@ -67,64 +52,36 @@
   <script src="js/notify-client.js"></script>
   <script src="js/status-labels.js"></script>
   <script src="js/chat-file-types.js"></script>
-  <!-- 機器輸入型 log 的前綴／收合文案單一來源，必須排在 views/TaskDetail.js 之前 -->
+  <!-- 機器輸入型 log 的前綴／收合文案單一來源，必須排在 ui-next/pages/TaskDetail.js 之前 -->
   <script src="js/machine-logs.js"></script>
-  <!-- pipeline 流程的內容單一來源，必須排在 views/PipelineFlow.js 之前 -->
+  <!-- pipeline 流程的內容單一來源，必須排在 ui-next/pages/PipelineFlow.js 之前 -->
   <script src="js/pipeline-spec.js"></script>
-  <!-- 系統地景的內容單一來源，必須排在 views/Architecture.js 之前 -->
+  <!-- 系統地景的內容單一來源，必須排在 ui-next/pages/Architecture.js 之前 -->
   <script src="js/architecture-spec.js"></script>
   <script src="js/tour-demo.js"></script>
   <script src="js/tour-courses.js"></script>
   <script src="js/tour.js"></script>
   <script src="js/vpn-obfuscation.js"></script>
-  <script src="js/views/Login.js"></script>
-  <script src="js/views/TaskList.js"></script>
-  <script src="js/views/TaskDetail.js"></script>
-  <script src="js/views/Inbox.js"></script>
-  <script src="js/views/Settings.js"></script>
-  <script src="js/views/ProjectList.js"></script>
-  <script src="js/views/ProjectDetail.js"></script>
-  <script src="js/views/ProjectDbQuery.js"></script>
-  <script src="js/views/Terminal.js"></script>
   <script src="js/vendor/marked.min.js"></script>
   <script src="js/markdown.js"></script>
-  <script src="js/views/WikiView.js"></script>
-  <script src="js/views/ProjectChat.js"></script>
-  <script src="js/views/PipelineFlow.js"></script>
-  <script src="js/views/Architecture.js"></script>
-  <script src="js/views/Admin.js"></script>
-  <script src="js/views/AdminUsers.js"></script>
-  <script src="js/views/AdminAgents.js"></script>
-  <script src="js/views/AdminSchedules.js"></script>
-  <script src="js/views/AdminPipelines.js"></script>
-  <script src="js/views/AdminHealthCheck.js"></script>
-  <script src="js/views/AdminRejections.js"></script>
-  <script src="js/views/AdminClassifySamples.js"></script>
-  <script src="js/views/AdminPromptLogs.js"></script>
-  <script src="js/views/AdminPortPool.js"></script>
-  <script src="js/views/AdminEnterprise.js"></script>
-  <script src="js/views/TokenReport.js"></script>
-  <!-- ui-next 與既有 View 分離；版本判斷單一來源在 head 的 window.UiVersion。 -->
   <script>
-    if (window.UiVersion === 'next') {
-      // pages/ 內每個檔各定義一個 window.UiNextXxxView，彼此不相依，順序無關。
-      // 但 UiNextShared.js 必須排在它們**之前**：有幾個檔在載入當下就從
-      // window.UiNextShared 解構取 helper，晚一步就是 undefined 而整支檔炸掉。
-      var UI_NEXT_PAGES = [
-        'Login', 'TokenReport', 'Pipeline', 'ProjectChat', 'ProjectDetail',
-        'TaskDetail', 'Settings', 'ProjectList', 'TaskList', 'Wiki',
-        'Terminal', 'Admin', 'Db', 'AdminUsers', 'DeployTargets',
-        'AdminSettings', 'AdminAgents', 'AdminSchedules', 'AdminHealthCheck',
-        'AdminRejections', 'AdminClassifySamples', 'AdminPromptLogs',
-        'AdminPortPool', 'AdminEnterprise', 'AdminFeedback', 'Release', 'Architecture', 'PipelineFlow',
-        'ExamBank', 'ExamRun', 'SaasSpecs', 'CompanyUsers', 'CompanyAdmin'
-      ];
-      var src = ['js/ui-next/UiNextApp.js', 'js/ui-next/UiNextShared.js']
-        .concat(UI_NEXT_PAGES.map(function (n) { return 'js/ui-next/pages/' + n + '.js'; }));
-      document.write(src.map(function (s) {
-        return '<script src="' + s + '?v=20260909a"><\/script>';
-      }).join(''));
-    }
+    // pages/ 內每個檔各定義一個 window.UiNextXxxView，彼此不相依，順序無關。
+    // 但 UiNextShared.js 必須排在它們**之前**：有幾個檔在載入當下就從
+    // window.UiNextShared 解構取 helper，晚一步就是 undefined 而整支檔炸掉。
+    var UI_NEXT_PAGES = [
+      'Login', 'TokenReport', 'Pipeline', 'ProjectChat', 'ProjectDetail',
+      'TaskDetail', 'Settings', 'ProjectList', 'TaskList', 'Wiki',
+      'Terminal', 'Admin', 'Db', 'AdminUsers', 'DeployTargets',
+      'AdminSettings', 'AdminAgents', 'AdminSchedules', 'AdminHealthCheck',
+      'AdminRejections', 'AdminClassifySamples', 'AdminPromptLogs',
+      'AdminPortPool', 'AdminEnterprise', 'AdminFeedback', 'Release', 'Architecture', 'PipelineFlow',
+      'ExamBank', 'ExamRun', 'SaasSpecs', 'CompanyUsers', 'CompanyAdmin'
+    ];
+    var src = ['js/ui-next/UiNextApp.js', 'js/ui-next/UiNextShared.js']
+      .concat(UI_NEXT_PAGES.map(function (n) { return 'js/ui-next/pages/' + n + '.js'; }));
+    document.write(src.map(function (s) {
+      return '<script src="' + s + '?v=20260909a"><\/script>';
+    }).join(''));
   </script>
   <script src="js/socket.js"></script>
   <script src="js/app.js"></script>

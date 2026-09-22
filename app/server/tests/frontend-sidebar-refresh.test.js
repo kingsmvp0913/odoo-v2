@@ -15,7 +15,7 @@
 //     （沒有「所有 mutation 都必須發事件」的自動推導，Api.post/put/delete 太多支無法一概而論）。
 //  C. 驗「條件的字面」不驗「條件的值」：監聽器掛著但 reloadSidebarLists 內部壞掉、
 //     或事件根本沒人收（元件早就 unmount），本檔照樣全綠。
-//  D. legacy 前端（app/public/js/views/）不在掃描範圍，也不該進——它已不維護。
+//  D. legacy 前端（app/public/js/views/）已於 2026-09-22 整個刪除，不存在掃描範圍的問題。
 //
 // 每一份切片都先斷言自己切得到、且發射點總數對得上：掃不到東西的守衛會永遠靜默通過。
 const fs = require('fs');

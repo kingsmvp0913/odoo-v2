@@ -11,7 +11,6 @@ const read = (f) => fs.readFileSync(path.join(__dirname, '../../public', f), 'ut
 
 describe('收件匣未讀 badge 只認 COUNT 端點', () => {
   const appJs = read('js/app.js');
-  const inboxJs = read('js/views/Inbox.js');
 
   test('loadInboxUnread 打 inbox/unread-count', () => {
     const body = appJs.match(/async function loadInboxUnread\(\)\s*\{[\s\S]*?\n\}/)[0];
@@ -21,24 +20,20 @@ describe('收件匣未讀 badge 只認 COUNT 端點', () => {
     expect(body).not.toMatch(/\.length/);
   });
 
-  test('Inbox 的 syncBadge 不自行從 items 推算', () => {
-    const body = inboxJs.match(/syncBadge\(\)\s*\{[^}]*\}/)[0];
-    expect(body).not.toContain('unreadCount');
-    expect(body).toContain('loadInboxUnread');
-  });
-
   // 後端存在對應端點才有意義；端點被改名時這裡要一起紅
   test('後端有 /api/inbox/unread-count', () => {
     const routes = fs.readFileSync(path.join(__dirname, '../inbox-routes.js'), 'utf8');
     expect(routes).toContain("app.get('/api/inbox/unread-count'");
   });
 
-  test('收件匣暫不顯示於側欄，但保留路由與未讀同步供既有連結使用', () => {
+  // 2026-09-22 舊版前端退役：收件匣頁（js/views/Inbox.js）一併刪除，ui-next 沒有對應頁面。
+  // 剩下的意圖是「既有連結與通知信裡的 /inbox 舊網址不得變成死連結」，所以改守轉址；
+  // 未讀同步（badge 的數字來源）與這條無關，仍照上面幾條守著。
+  test('收件匣沒有頁面了，但 /inbox 舊連結仍轉得到任務列表', () => {
     expect(appJs).not.toContain('data-tour="nav-inbox"');
-    // route 定義過 prettier 後拆成多行、引號也換了；斷言的是「這條 route 仍指向 InboxView」，
-    // 不是它排版長什麼樣。
+    expect(appJs).not.toContain('window.InboxView');   // 元件已刪，留著就是指向不存在的東西
     expect(appJs).toMatch(
-      /path:\s*['"]\/inbox['"]\s*,\s*component:\s*window\.InboxView/,
+      /path:\s*['"]\/inbox['"]\s*,\s*redirect:\s*['"]\/tasks\?tab=needs_action['"]/,
     );
     expect(appJs).toMatch(/Api\.get\(\s*['"]inbox\/unread-count['"]\s*\)/);
   });

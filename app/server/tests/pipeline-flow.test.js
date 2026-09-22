@@ -34,7 +34,7 @@ const drawnStatuses = () => new Set(
 // 實際發生過：改路由邏輯時多了一個 `}`，測試全綠、頁面全白。
 test('PipelineFlow.js 語法有效（語法錯＝整頁白畫面，靜態比對抓不到）', () => {
   const vm = require('vm');
-  const src = fs.readFileSync(path.join(__dirname, '../../public/js/views/PipelineFlow.js'), 'utf8');
+  const src = fs.readFileSync(path.join(__dirname, '../../public/js/ui-next/pages/PipelineFlow.js'), 'utf8');
   expect(() => new vm.Script(src, { filename: 'PipelineFlow.js' })).not.toThrow();
 });
 
@@ -46,11 +46,11 @@ test('PipelineFlow.js 語法有效（語法錯＝整頁白畫面，靜態比對�
 // 只取 data() 與 computed.flags 這兩個純函式來驗。
 const loadView = (extraTracks = []) => {
   const vm = require('vm');
-  const src = fs.readFileSync(path.join(__dirname, '../../public/js/views/PipelineFlow.js'), 'utf8');
+  const src = fs.readFileSync(path.join(__dirname, '../../public/js/ui-next/pages/PipelineFlow.js'), 'utf8');
   const sandbox = { Vue: { defineComponent: (d) => d }, PF_TRACKS: [...PF_TRACKS, ...extraTracks] };
   sandbox.window = sandbox;
   vm.runInNewContext(src, sandbox);
-  return sandbox.PipelineFlowView;
+  return sandbox.UiNextPipelineFlowView;
 };
 
 describe('泳道開關與 spec 的擴充方式一致', () => {
@@ -82,13 +82,15 @@ describe('泳道開關與 spec 的擴充方式一致', () => {
 
 // spec 是純資料檔，但 view 靠 <script> 全域載入——漏加 script tag 的症狀是整頁白畫面，
 // 而 jest 這邊 require 得到、照樣全綠。
-test('index.html 有載入 pipeline-spec.js 且排在 PipelineFlow.js 之前', () => {
+// 2026-09-22 舊版前端退役後，View 改由 index.html 那段 UI_NEXT_PAGES 的 document.write 載入。
+test('index.html 有載入 pipeline-spec.js 且排在 ui-next 的 pages/ 之前', () => {
   const html = fs.readFileSync(path.join(__dirname, '../../public/index.html'), 'utf8');
   const spec = html.indexOf('js/pipeline-spec.js');
-  const view = html.indexOf('js/views/PipelineFlow.js');
+  const pages = html.indexOf('js/ui-next/pages/');
   expect(spec).toBeGreaterThan(-1);
-  expect(view).toBeGreaterThan(-1);
-  expect(spec).toBeLessThan(view);
+  expect(pages).toBeGreaterThan(-1);
+  expect(spec).toBeLessThan(pages);
+  expect(html).toContain("'PipelineFlow'");   // 那份清單真的有這一頁，否則上一條比了個空
 });
 
 describe('流程圖節點對得上狀態機', () => {

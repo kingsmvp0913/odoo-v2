@@ -46,9 +46,10 @@ function createApp() {
   // ui-next-pages.css 拆成 9 支。結果是「改任何一支 View 或分頁 CSS，版本號都不會變」，
   // 使用者拿到的永遠是快取的舊碼，而且畫面上沒有任何徵狀（2026-09-05 實際發生）。
   // 掃目錄不遞迴：只取這幾個目錄下的第一層 .css／.js，避開 vendor 那種大目錄。
+  // js/views 於 2026-09-22 隨舊版前端整個刪除，故不再列入。
   const ASSET_DIRS = [
     'css', 'css/ui-next-pages',
-    'js', 'js/views', 'js/ui-next', 'js/ui-next/pages',
+    'js', 'js/ui-next', 'js/ui-next/pages',
   ];
   const newestAssetMtime = () => {
     let newest = 0;

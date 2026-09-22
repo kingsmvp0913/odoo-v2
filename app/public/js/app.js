@@ -1,4 +1,5 @@
-const { createApp, defineComponent, ref, onMounted } = Vue;
+// defineComponent／onMounted 隨舊外殼（App）一起退役，這裡不再取用。
+const { createApp, ref } = Vue;
 const { createRouter, createWebHashHistory } = VueRouter;
 
 const toasts = ref([]);
@@ -103,110 +104,93 @@ const router = createRouter({
   routes: [
     {
       path: "/login",
-      component: window.UiNextEnabled ? window.UiNextLoginView : window.LoginView,
+      component: window.UiNextLoginView,
     },
     { path: "/forbidden", component: ForbiddenView },
     {
       path: "/",
-      component: window.UiNextEnabled
-        ? window.UiNextQuestionView
-        : window.TaskListView,
+      component: window.UiNextQuestionView,
       meta: { requiresAuth: true },
     },
     {
       path: "/tasks",
-      component: window.UiNextEnabled
-        ? window.UiNextTaskListView
-        : window.TaskListView,
+      component: window.UiNextTaskListView,
       meta: { requiresAuth: true },
     },
     {
       path: "/task/:id",
-      component: window.UiNextEnabled
-        ? window.UiNextTaskDetailView
-        : window.TaskDetailView,
+      component: window.UiNextTaskDetailView,
       meta: { requiresAuth: true },
     },
     {
+      // 收件匣沒有獨立頁面了（舊版前端 2026-09-22 退役，Inbox.js 一併刪除）。
+      // 路由留著只為了讓既有連結／通知信裡的舊網址仍到得了對應的地方。
       path: "/inbox",
-      component: window.InboxView,
-      redirect: window.UiNextEnabled ? "/tasks?tab=needs_action" : undefined,
+      redirect: "/tasks?tab=needs_action",
       meta: { requiresAuth: true },
     },
     {
       // 終端機頁面能直接下指令操作任務所在容器，2026-09-21 使用者裁決 D2「兩個都收」
       // 收斂為平台管理員限定。
       path: "/task/:id/terminal",
-      component: window.UiNextEnabled ? window.UiNextTerminalView : window.TerminalView,
+      component: window.UiNextTerminalView,
       meta: { requiresAuth: true, requiresAdmin: true },
     },
     {
       path: "/projects",
-      component: window.UiNextEnabled
-        ? window.UiNextProjectListView
-        : window.ProjectListView,
+      component: window.UiNextProjectListView,
       meta: { requiresAuth: true },
     },
     {
       path: "/projects/:id",
-      component: window.UiNextEnabled
-        ? window.UiNextProjectDetailView
-        : window.ProjectDetailView,
+      component: window.UiNextProjectDetailView,
       meta: { requiresAuth: true },
     },
     {
       path: "/projects/:id/wiki",
-      component: window.UiNextEnabled ? window.UiNextWikiView : window.WikiView,
+      component: window.UiNextWikiView,
       meta: { requiresAuth: true },
     },
     {
       path: "/projects/:id/wiki/:slug",
-      component: window.UiNextEnabled ? window.UiNextWikiView : window.WikiView,
+      component: window.UiNextWikiView,
       meta: { requiresAuth: true },
     },
     {
       path: "/projects/:id/chat",
-      component: window.UiNextEnabled
-        ? window.UiNextProjectChatView
-        : window.ProjectChatView,
+      component: window.UiNextProjectChatView,
       meta: { requiresAuth: true },
     },
     {
       path: "/projects/:id/chat/:chatId",
-      component: window.UiNextEnabled
-        ? window.UiNextProjectChatView
-        : window.ProjectChatView,
+      component: window.UiNextProjectChatView,
       meta: { requiresAuth: true },
     },
     {
       path: "/projects/:id/db",
-      component: window.UiNextEnabled ? window.UiNextDbView : window.ProjectDbQueryView,
+      component: window.UiNextDbView,
       meta: { requiresAuth: true },
     },
     {
       path: "/token-report",
-      component: window.UiNextEnabled
-        ? window.UiNextTokenReportView
-        : window.TokenReportView,
+      component: window.UiNextTokenReportView,
       meta: { requiresAuth: true, requiresAdmin: true },
     },
     {
       path: "/settings",
-      component: window.UiNextEnabled
-        ? window.UiNextSettingsView
-        : window.SettingsView,
+      component: window.UiNextSettingsView,
       meta: { requiresAuth: true },
     },
     {
       // 架構圖是平台內部實作細節，2026-09-21 起收斂為平台管理員限定（規格 §5.5）。
       path: "/architecture",
-      component: window.UiNextEnabled ? window.UiNextArchitectureView : window.ArchitectureView,
+      component: window.UiNextArchitectureView,
       meta: { requiresAuth: true, requiresAdmin: true },
     },
     {
       // 流程圖同上，收斂為平台管理員限定（規格 §5.5）。
       path: "/pipeline-flow",
-      component: window.UiNextEnabled ? window.UiNextPipelineFlowView : window.PipelineFlowView,
+      component: window.UiNextPipelineFlowView,
       meta: { requiresAuth: true, requiresAdmin: true },
     },
     {
@@ -258,79 +242,71 @@ const router = createRouter({
     },
     {
       path: "/admin",
-      component: window.UiNextEnabled
-        ? window.UiNextAdminView
-        : window.AdminView,
+      component: window.UiNextAdminView,
       meta: { requiresAuth: true, requiresAdmin: true },
     },
     {
-      // Legacy 的 /admin 本身就是全部設定表單，這條子路由是 Next 專用的入口；
-      // Legacy 走到這裡一樣給 AdminView，內容相同不會白屏。
       path: "/admin/settings",
-      component: window.UiNextEnabled ? window.UiNextAdminSettingsView : window.AdminView,
+      component: window.UiNextAdminSettingsView,
       meta: { requiresAuth: true, requiresAdmin: true },
     },
     {
       path: "/admin/users",
-      component: window.UiNextEnabled ? window.UiNextAdminUsersView : window.AdminUsersView,
+      component: window.UiNextAdminUsersView,
       meta: { requiresAuth: true, requiresAdmin: true },
     },
     {
       path: "/admin/agents",
-      component: window.UiNextEnabled ? window.UiNextAdminAgentsView : window.AdminAgentsView,
+      component: window.UiNextAdminAgentsView,
       meta: { requiresAuth: true, requiresAdmin: true },
     },
     {
       path: "/admin/schedules",
-      component: window.UiNextEnabled ? window.UiNextAdminSchedulesView : window.AdminSchedulesView,
+      component: window.UiNextAdminSchedulesView,
       meta: { requiresAuth: true, requiresAdmin: true },
     },
     {
       path: "/admin/pipelines",
-      component: window.UiNextEnabled
-        ? window.UiNextPipelineView
-        : window.AdminPipelinesView,
+      component: window.UiNextPipelineView,
       meta: { requiresAuth: true, requiresAdmin: true },
     },
     {
       path: "/admin/health",
-      component: window.UiNextEnabled ? window.UiNextAdminHealthCheckView : window.AdminHealthCheckView,
+      component: window.UiNextAdminHealthCheckView,
       meta: { requiresAuth: true, requiresAdmin: true },
     },
     {
       path: "/admin/rejections",
-      component: window.UiNextEnabled ? window.UiNextAdminRejectionsView : window.AdminRejectionsView,
+      component: window.UiNextAdminRejectionsView,
       meta: { requiresAuth: true, requiresAdmin: true },
     },
     {
       path: "/admin/classify-samples",
-      component: window.UiNextEnabled ? window.UiNextAdminClassifySamplesView : window.AdminClassifySamplesView,
+      component: window.UiNextAdminClassifySamplesView,
       meta: { requiresAuth: true, requiresAdmin: true },
     },
     {
       path: "/admin/prompt-logs",
-      component: window.UiNextEnabled ? window.UiNextAdminPromptLogsView : window.AdminPromptLogsView,
+      component: window.UiNextAdminPromptLogsView,
       meta: { requiresAuth: true, requiresAdmin: true },
     },
     {
       path: "/admin/port-pool",
-      component: window.UiNextEnabled ? window.UiNextAdminPortPoolView : window.AdminPortPoolView,
+      component: window.UiNextAdminPortPoolView,
       meta: { requiresAuth: true, requiresAdmin: true },
     },
     {
       path: "/admin/enterprise",
-      component: window.UiNextEnabled ? window.UiNextAdminEnterpriseView : window.AdminEnterpriseView,
+      component: window.UiNextAdminEnterpriseView,
       meta: { requiresAuth: true, requiresAdmin: true },
     },
     {
-      // Legacy 沒有這一頁（意見回饋通道是 Next-only 功能），沒有 Legacy fallback 元件。
       path: "/admin/feedback",
       component: window.UiNextAdminFeedbackView,
       meta: { requiresAuth: true, requiresAdmin: true },
     },
     {
-      // 平台更版（階段 5）。Legacy 沒有這一頁——更版機制整個是 Next 之後才有的東西，
-      // 沒有 Legacy fallback 元件（比照上面的意見回饋通道）。
+      // 平台更版（階段 5）。
       // ⚠ 三層防線的中間那層：nav 的 v-if 在 UiNextApp.js「更多工具」，後端 403 在
       // release-routes.js 的 requirePlatformAdmin。少一層就是洞。
       path: "/admin/release",
@@ -426,237 +402,8 @@ router.afterEach((to) => {
 setInterval(loadClaudeUsage, 3 * 60 * 1000);
 setInterval(loadCodexUsage, 10 * 60 * 1000);
 
-const App = defineComponent({
-  name: "App",
-  setup() {
-    return { toasts, dismissToast, needsActionCount, inboxUnread, claudeUsage, codexUsage };
-  },
-  data() {
-    return {
-      _role: "",
-      drawerOpen: false,
-      isDark: window.ThemeManager && ThemeManager.current() === "dark",
-    };
-  },
-  watch: {
-    // 點了 drawer 裡的連結後，頁面換了但遮罩與側欄還蓋在上面，看起來像卡住 → 導覽即關。
-    $route() {
-      this.drawerOpen = false;
-    },
-  },
-  computed: {
-    isLoggedIn() {
-      return Api.authState.loggedIn;
-    },
-    // 角色以 reactive 的 UserStore 為單一來源：每次導覽（含剛登入）由 afterEach 更新，
-    // 不再只靠 mounted 一次性載入 → 表單登入後 isAdmin 立即正確，免重新整理
-    isAdmin() {
-      return window.UserStore.role === "admin";
-    },
-    usageBars() {
-      const u = this.claudeUsage;
-      if (!u || !u.available) return [];
-      const rows = [];
-      const add = (key, label, w) => {
-        if (!w || w.utilization == null) return;
-        const pct = Math.round(w.utilization);
-        rows.push({
-          key,
-          label,
-          pct,
-          level: pct >= 90 ? "crit" : pct >= 70 ? "warn" : "ok",
-          reset: w.resets_at ? this.fmtReset(w.resets_at) : "",
-        });
-      };
-      add("5h", "5 小時", u.five_hour);
-      add("7d", "本週", u.seven_day);
-      add("opus", "Opus 週", u.seven_day_opus);
-      add("sonnet", "Sonnet 週", u.seven_day_sonnet);
-      return rows;
-    },
-    usageStale() {
-      return !!(this.claudeUsage && this.claudeUsage.stale);
-    },
-    usageUpdatedLabel() {
-      const iso = this.claudeUsage && this.claudeUsage.updated_at;
-      return iso ? this.fmtReset(iso) : "";
-    },
-    codexUsageRows() {
-      const u = this.codexUsage;
-      if (!u || !u.available) return [];
-      const rows = [];
-      const add = (key, label, window) => {
-        if (!window) return;
-        rows.push({
-          key,
-          label,
-          pct: Math.round(window.used_percent),
-          remaining: Math.round(window.remaining_percent),
-          level:
-            window.used_percent >= 90
-              ? "crit"
-              : window.used_percent >= 70
-                ? "warn"
-                : "ok",
-          reset: window.resets_at ? this.fmtReset(window.resets_at) : "",
-        });
-      };
-      add("primary", "主要額度", u.primary);
-      add("secondary", "週額度", u.secondary);
-      return rows;
-    },
-    projectUnreadTotal() {
-      return Object.values(window.UnreadStore.byProject).reduce(
-        (a, b) => a + (b || 0),
-        0,
-      );
-    },
-  },
-  async mounted() {
-    this._onThemeChange = (e) => {
-      this.isDark = e.detail === "dark";
-    };
-    window.addEventListener("themechange", this._onThemeChange);
-    this._onKeydown = (e) => {
-      if (e.key === "Escape") this.drawerOpen = false;
-    };
-    window.addEventListener("keydown", this._onKeydown);
-    if (Api.isLoggedIn()) {
-      const me = await Api.get("auth/me").catch(() => ({}));
-      this._role = me.role || "";
-      window.UserStore.role = me.role || "";
-      ThemeManager.syncFromServer(me.odoo_settings && me.odoo_settings.theme);
-      this.isDark = ThemeManager.current() === "dark";
-      loadClaudeUsage();
-      loadCodexUsage();
-      loadUnread();
-    }
-  },
-  unmounted() {
-    window.removeEventListener("themechange", this._onThemeChange);
-    window.removeEventListener("keydown", this._onKeydown);
-  },
-  methods: {
-    fmtReset(iso) {
-      return new Date(iso).toLocaleString("zh-TW", {
-        month: "numeric",
-        day: "numeric",
-        hour: "2-digit",
-        minute: "2-digit",
-      });
-    },
-    toggleTheme() {
-      ThemeManager.toggle();
-    },
-    logout() {
-      Api.clearToken();
-      window.UserStore.role = "";
-      SocketManager.disconnectSocket();
-      this.$router.push("/login");
-    },
-  },
-  template: `
-    <template v-if="!isLoggedIn || $route.path === '/login'">
-      <router-view />
-    </template>
-    <template v-else>
-      <div class="app-shell">
-        <header class="mobile-topbar">
-          <button class="drawer-toggle" type="button" @click="drawerOpen = true" aria-label="開啟選單"><span class="drawer-toggle-bars"></span></button>
-          <span class="mobile-topbar-title">Odoo AI 自動開發平台</span>
-        </header>
-        <div v-if="drawerOpen" class="drawer-overlay" @click="drawerOpen = false"></div>
-        <aside class="sidebar" :class="{ 'is-open': drawerOpen }">
-          <div class="sidebar-header">
-            <img class="sidebar-brand-mark" src="favicon.svg" alt="OAA">
-            <div class="sidebar-brand-copy"><strong>Odoo AI</strong><span>自動開發平台</span></div>
-            <button @click="toggleTheme" :title="isDark ? '切換淺色模式' : '切換深色模式'"
-              style="margin-left:auto;background:transparent;border:none;color:var(--sidebar-text);cursor:pointer;font-size:16px;padding:2px 4px;line-height:1">
-              {{ isDark ? '☀️' : '🌙' }}
-            </button>
-          </div>
-          <nav>
-            <router-link to="/" custom v-slot="{ navigate, isActive }">
-              <a data-tour="nav-tasks" :class="{ active: isActive }" @click="navigate">
-                📋 任務列表
-                <span v-if="needsActionCount > 0" class="badge">{{ needsActionCount }}</span>
-              </a>
-            </router-link>
-            <!-- 收件匣路由保留供既有連結使用，暫不放在日常導覽。 -->
-            <router-link to="/projects" custom v-slot="{ navigate, isActive }">
-              <a data-tour="nav-projects" :class="{ active: isActive }" @click="navigate">
-                📁 專案
-                <span v-if="projectUnreadTotal > 0" class="badge">{{ projectUnreadTotal }}</span>
-              </a>
-            </router-link>
-            <router-link to="/admin/pipelines" custom v-slot="{ navigate, isActive }">
-              <a data-tour="nav-pipeline" :class="{ active: isActive }" @click="navigate">🚦 進行中 Pipeline</a>
-            </router-link>
-            <router-link v-if="isAdmin" to="/token-report" custom v-slot="{ navigate, isActive }">
-              <a :class="{ active: isActive }" @click="navigate">📊 用量報表</a>
-            </router-link>
-            <router-link to="/settings" custom v-slot="{ navigate, isActive }">
-              <a data-tour="nav-settings" :class="{ active: isActive }" @click="navigate">⚙️ 設定</a>
-            </router-link>
-            <router-link v-if="isAdmin" to="/admin" custom v-slot="{ navigate, isActive }">
-              <a :class="{ active: isActive }" @click="navigate">🔧 管理員</a>
-            </router-link>
-            <!-- 地景圖與流程圖是「查資料」的兩頁，不是日常操作，故排在所有操作項目之後 -->
-            <router-link to="/architecture" custom v-slot="{ navigate, isActive }">
-              <a :class="{ active: isActive }" @click="navigate">🏗️ 架構圖</a>
-            </router-link>
-            <router-link to="/pipeline-flow" custom v-slot="{ navigate, isActive }">
-              <a :class="{ active: isActive }" @click="navigate">🗺️ 流程圖</a>
-            </router-link>
-          </nav>
-          <div class="sidebar-footer">
-            <div v-if="isAdmin && usageBars.length" class="usage-mini" @click="$router.push('/token-report')" title="檢視用量報表">
-              <div class="usage-title">
-                <span class="usage-provider-logo claude" aria-hidden="true"><svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 100 100" fill="currentColor"><path d="m19.6 66.5 19.7-11 .3-1-.3-.5h-1l-3.3-.2-11.2-.3L14 53l-9.5-.5-2.4-.5L0 49l.2-1.5 2-1.3 2.9.2 6.3.5 9.5.6 6.9.4L38 49.1h1.6l.2-.7-.5-.4-.4-.4L29 41l-10.6-7-5.6-4.1-3-2-1.5-2-.6-4.2 2.7-3 3.7.3.9.2 3.7 2.9 8 6.1L37 36l1.5 1.2.6-.4.1-.3-.7-1.1L33 25l-6-10.4-2.7-4.3-.7-2.6c-.3-1-.4-2-.4-3l3-4.2L28 0l4.2.6L33.8 2l2.6 6 4.1 9.3L47 29.9l2 3.8 1 3.4.3 1h.7v-.5l.5-7.2 1-8.7 1-11.2.3-3.2 1.6-3.8 3-2L61 2.6l2 2.9-.3 1.8-1.1 7.7L59 27.1l-1.5 8.2h.9l1-1.1 4.1-5.4 6.9-8.6 3-3.5L77 13l2.3-1.8h4.3l3.1 4.7-1.4 4.9-4.4 5.6-3.7 4.7-5.3 7.1-3.2 5.7.3.4h.7l12-2.6 6.4-1.1 7.6-1.3 3.5 1.6.4 1.6-1.4 3.4-8.2 2-9.6 2-14.3 3.3-.2.1.2.3 6.4.6 2.8.2h6.8l12.6 1 3.3 2 1.9 2.7-.3 2-5.1 2.6-6.8-1.6-16-3.8-5.4-1.3h-.8v.4l4.6 4.5 8.3 7.5L89 80.1l.5 2.4-1.3 2-1.4-.2-9.2-7-3.6-3-8-6.8h-.5v.7l1.8 2.7 9.8 14.7.5 4.5-.7 1.4-2.6 1-2.7-.6-5.8-8-6-9-4.7-8.2-.5.4-2.9 30.2-1.3 1.5-3 1.2-2.5-2-1.4-3 1.4-6.2 1.6-8 1.3-6.4 1.2-7.9.7-2.6v-.2H49L43 72l-9 12.3-7.2 7.6-1.7.7-3-1.5.3-2.8L24 86l10-12.8 6-7.9 4-4.6-.1-.5h-.3L17.2 77.4l-4.7.6-2-2 .2-3 1-1 8-5.5Z"></path></svg></span>
-                <span>Claude 用量</span>
-              </div>
-              <div v-if="usageStale && usageUpdatedLabel" class="usage-stale">最後更新 {{ usageUpdatedLabel }}</div>
-              <div v-for="bar in usageBars" :key="bar.key" class="usage-row">
-                <div class="usage-row-top">
-                  <span>{{ bar.label }}</span>
-                  <span>{{ bar.pct }}%</span>
-                </div>
-                <div class="usage-track">
-                  <div class="usage-fill" :class="bar.level" :style="{ width: bar.pct + '%' }"></div>
-                </div>
-                <div v-if="bar.reset" class="usage-reset">重置 {{ bar.reset }}</div>
-              </div>
-            </div>
-            <div v-if="isAdmin && codexUsageRows.length" class="usage-mini" @click="$router.push('/token-report')" title="檢視用量報表">
-              <div class="usage-title"><span class="usage-provider-logo codex" aria-hidden="true"><img src="https://images.ctfassets.net/kftzwdyauwt9/77tJ5U1tgxHMZflZ5m4Z24/ace4d8b6ad200d87ebcb69c466344343/Blossom_4k_Icon_1.png?w=1920&amp;q=90&amp;fm=webp" alt="" /></span><span>Codex 用量</span></div>
-              <div v-for="row in codexUsageRows" :key="row.key" class="usage-row">
-                <div class="usage-row-top"><span>{{ row.label }}</span><span>剩 {{ row.remaining }}%</span></div>
-                <div class="usage-track"><div class="usage-fill" :class="row.level" :style="{ width: row.pct + '%' }"></div></div>
-                <div v-if="row.reset" class="usage-reset">重置 {{ row.reset }}</div>
-              </div>
-            </div>
-            <div class="sidebar-footer-actions">
-              <a @click="logout" style="cursor:pointer">登出</a>
-            </div>
-          </div>
-        </aside>
-        <div class="main">
-          <router-view />
-        </div>
-      </div>
-    </template>
-    <div class="toast-container">
-      <div v-for="t in toasts" :key="t.id" class="toast" :class="t.level">{{ t.message }}<button v-if="t.sticky" type="button" class="toast-close" aria-label="關閉訊息" @click="dismissToast(t.id)">×</button></div>
-    </div>
-    <confirm-dialog-host />
-    <image-preview-host />
-    <tour-host />
-  `,
-});
-
-// ui-next 是可隨時移除 query string 回到現有介面的平行入口；兩套 shell 不共用 CSS class 或元件。
-const RootApp = window.UiNextEnabled ? window.UiNextApp : App;
-const app = createApp(RootApp);
+// 外殼只剩 ui-next 這一套（舊版前端 2026-09-22 退役，js/views/ 與 ?ui=legacy 一併刪除）。
+const app = createApp(window.UiNextApp);
 app.component("ConfirmDialogHost", window.ConfirmDialogHost);
 app.component("ImagePreviewHost", window.ImagePreviewHost);
 // 放大跳窗要能從任何一支 View 的 template 直接叫（縮圖散在十幾個地方），掛 globalProperties
@@ -666,7 +413,6 @@ app.component("Skeleton", window.Skeleton);
 app.component("ReleaseModal", window.ReleaseModal);
 app.component("TourHost", window.TourHost);
 // 可搜尋的專案下拉，跟上面幾個一樣是跨 View 共用的元件，所以一起全域註冊。
-// 要判斷：Legacy 那套 shell 不載 UiNextShared.js，註冊 undefined 會在主控台噴警告。
-if (window.UiNextShared) app.component("UiNextProjectPicker", window.UiNextShared.UiNextProjectPicker);
+app.component("UiNextProjectPicker", window.UiNextShared.UiNextProjectPicker);
 app.use(router);
 app.mount("#app");

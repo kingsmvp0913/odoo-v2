@@ -137,11 +137,14 @@ describe('markdown 轉 HTML 只有一個入口', () => {
     expect(src).toMatch(/marked\.use\(/);
   });
 
-  test('index.html 載入 markdown.js，且排在 marked 與 WikiView 之間', () => {
+  // 2026-09-22 舊版前端退役後，Wiki 頁改由 index.html 那段 UI_NEXT_PAGES 的 document.write 載入，
+  // 所以下界從寫死的 WikiView script src 換成那段動態載入的起點。
+  test('index.html 載入 markdown.js，且排在 marked 與 ui-next 的 pages/ 之間', () => {
     const html = readPublic('index.html');
     expect(html).toContain('<script src="js/markdown.js"></script>');
     expect(html.indexOf('js/vendor/marked.min.js')).toBeLessThan(html.indexOf('js/markdown.js'));
-    expect(html.indexOf('js/markdown.js')).toBeLessThan(html.indexOf('js/views/WikiView.js'));
+    expect(html.indexOf('js/markdown.js')).toBeLessThan(html.indexOf('js/ui-next/pages/'));
+    expect(html).toContain("'Wiki'");   // 那份清單真的有這一頁，否則上一條比了個空
   });
 });
 
@@ -149,13 +152,9 @@ describe('v-html 綁定白名單', () => {
   // v-html 是全站唯一能把字串當 HTML 執行的出口，因此把它當作需要逐一審過的清單來管：
   // 新增一個沒審過的 v-html 就讓測試紅，逼人來想「這個字串從哪來、消毒了沒」。
   const VETTED = new Set([
-    'renderedContent',      // WikiView：走 renderMarkdown，見本檔上方行為測試
-    'renderMd(m.content)',  // ProjectChat：renderMd 只是 renderMarkdown 的薄封裝（同一消毒入口）
+    'renderedContent',      // UiNextWikiView：走 renderMarkdown，見本檔上方行為測試
     'renderMd(row.message.content)', // UiNextProjectChat：同一個 renderMarkdown 薄封裝（v-for 變數 message→row，因為對話插了日期分隔列；來源仍是後端 project_chats 訊息內容）
     'renderTaskMessage(row.content)', // UiNextTaskDetail：同一個 renderMarkdown 薄封裝（v-for 變數 item→row，因為時間軸插了日期分隔列）
-    'ansiToHtml(ev.content)', // TaskDetail：函式內自行 escape 後才組 HTML（TaskDetail.js 的 esc()）
-    // Next UI 是同樣這兩個綁定的重寫，消毒入口相同、只有 v-for 變數名不同：
-    // UiNextPages.js 的 renderMd() 直接轉呼 renderMarkdown()；ansiToHtml() 內含自己的 esc()。
     // 白名單比對的是表達式「字面值」，所以改個變數名就落到清單外——那是刻意的，
     // 逼人重新確認新綁定的字串來源，不是可以隨手照抄補進來的形式差異。
     'ansiToHtml(event.content)',  // UiNextTaskDetailView：同 ansiToHtml(ev.content)
@@ -163,7 +162,6 @@ describe('v-html 綁定白名單', () => {
     // 「現在 vs 改完」對照。消毒入口與上面幾筆相同：renderMarkdown 把原始 HTML 一律 escape
     // （markdown.js 的 renderer.html），href/src 走 safeUrl。
     'renderTaskMessage(spec.summary)',  // UiNextTaskDetailView：同一個 renderMarkdown 薄封裝
-    'renderSpecSummary(spec.summary)',  // Legacy TaskDetail：同上，只是薄封裝的名字不同
     // tour.js：step.text 的字串來源全部是 tour-courses.js 裡硬編的靜態字面值；
     // 教程刻意不打任何 API（tour-isolation.test.js 守「不得出現 fetch/Api. 呼叫」），
     // 進度只存 localStorage，沒有 DB 資料、API 回應或使用者輸入會流進這個綁定。

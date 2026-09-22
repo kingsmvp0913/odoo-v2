@@ -1,7 +1,8 @@
 const fs = require('fs');
 const path = require('path');
+// 2026-09-22 舊版前端退役：對象從 js/views/ProjectDbQuery.js 換成現在唯一在跑的 ui-next 版。
 const SRC = fs.readFileSync(
-  path.join(__dirname, '..', '..', 'public', 'js', 'views', 'ProjectDbQuery.js'), 'utf8');
+  path.join(__dirname, '..', '..', 'public', 'js', 'ui-next', 'pages', 'Db.js'), 'utf8');
 
 const LOG_FIELDS = ['log_mode', 'log_container', 'log_unit', 'log_path', 'log_tz_offset'];
 
