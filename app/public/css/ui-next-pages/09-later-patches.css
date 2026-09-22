@@ -1982,3 +1982,22 @@ html[data-theme="dark"] .ui-next-shell{--ui-next-composer-bg:color-mix(in srgb,#
 /* 四顆操作鈕。表格本來就剛好塞滿，不換行會把最後一顆推出容器外 */
 .ui-next-deploy-actions{display:flex;flex-wrap:wrap;gap:6px;min-width:150px}
 .ui-next-deploy-page .data-table td .ui-next-deploy-actions .btn{margin:0}
+
+/* 公司管理頁（/admin/companies）：詳細畫面 2026-09-22 改成分頁＋面板，形狀沿用個人設定頁
+   （.ui-next-page-tabs ＋ .ui-next-panel ＋ .ui-next-toggle），同時把模板裡二十幾條行內樣式
+   收掉——行內樣式混著寫死 px 與 token，深色模式無從覆寫，同一頁的間距也各自漂移。
+   ⚠ .ui-next-panel 的直排間距原本是 .ui-next-settings-grid 給的（那是一張兩欄格線），
+   這頁一個分頁只有一張整條寬的面板、不進那個格線，所以間距得自己來；少了這條，
+   標題會直接貼在欄位上。 */
+.ui-next-company-admin-page .ui-next-panel{display:flex;flex-direction:column;gap:var(--space-3)}
+/* 面板內的說明段落與 GIT 失敗訊息：間距由上面那條 gap 統一給，
+   <p> 的預設外距與 .error-msg 自帶的 margin-bottom 都會再疊一層。 */
+.ui-next-company-admin-page .ui-next-panel p,
+.ui-next-company-admin-page .ui-next-panel .error-msg{margin:0}
+/* 「← 返回列表」與底下的公司名稱之間要有一口氣，否則兩者黏成一塊。 */
+.ui-next-company-admin-page .ui-next-company-back{margin-bottom:var(--space-3)}
+/* 標題旁的「內部公司」標籤：h1 是 30px，不對齊會掉到基線下面去。 */
+.ui-next-company-admin-page h1 .pill{margin-left:var(--space-2);vertical-align:middle}
+/* 開關本身只有 18px 高，跟同一條 grid 列裡的輸入框（33px）並排時那一格會塌一塊。
+   跟 .field-input 一樣用 padding 撐，不寫死高度——字級一變，寫死的高度就脫節。 */
+.ui-next-company-admin-page .conn-fields .ui-next-toggle{padding:var(--space-2) 0}

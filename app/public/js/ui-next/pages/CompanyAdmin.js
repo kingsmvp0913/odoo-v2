@@ -13,11 +13,22 @@
   // 3. 公司 GIT 存檔前，後端會對這家公司綁到的每個 repo 真的跑一次 git ls-remote，
   //    所以不是瞬間完成；失敗時後端回的錯誤原文會指名哪個 repo 連不上，必須原文顯示，
   //    換成「儲存失敗」等於把唯一能查的線索吃掉。
+  // 詳細畫面的四個分頁，一比一對應原本直排的四個區塊（沒有任何內容被收掉）。
+  // 形狀抄個人設定頁（Settings.js 的 SETTINGS_TABS ＋ .ui-next-page-tabs），
+  // 不自創第二種分頁寫法。
+  const COMPANY_TABS = [
+    { key: "basic", label: "基本資料" },
+    { key: "features", label: "功能開關" },
+    { key: "projects", label: "綁定的專案" },
+    { key: "git", label: "GIT 憑證" },
+  ];
+
   window.UiNextCompanyAdminView = Vue.defineComponent({
     name: "UiNextCompanyAdminView",
     data() {
       return {
         companies: [],
+        tab: "basic",
         loading: true,
         loadError: "",
         featureDefs: [], // [{key,label}]，來自 GET /api/admin/companies/features
@@ -58,6 +69,7 @@
       };
     },
     computed: {
+      tabs() { return COMPANY_TABS; },
       // 還沒綁給這家公司的專案，供「新增綁定」下拉選單用。
       unboundProjects() {
         const boundIds = new Set(this.boundProjects.map((p) => p.project_id));
@@ -110,6 +122,9 @@
 
       async openCompany(c) {
         this.selected = c;
+        // 分頁一律回到第一頁：停在上一家公司看到的分頁，會讓人以為資料跟著人跑了
+        //（點開 B 公司卻直接落在 GIT 憑證那頁，第一眼分不出那是誰的憑證）。
+        this.tab = "basic";
         this.detailError = "";
         this.form = {
           name: c.name,
@@ -207,14 +222,22 @@
         }
       },
 
+      // 先改資料、失敗再改回來（形狀抄 ProjectDetail.js 的 saveAutoDeploy）。
+      // 勾勾是單向的 :checked：後端拒絕時若 row.can_release 從頭到尾沒變過，
+      // Vue 的 vnode 比對會判定「值沒變」而不重寫 DOM property，勾勾就停在使用者
+      // 按出來的（錯的）狀態，直到別的原因害它重畫為止——畫面說了一件沒發生的事。
       async toggleCanRelease(row) {
+        // 變數不叫 next：下面 finally 裡已經有一個 next（releaseBusy 的新值），同名會互相遮蔽。
+        const wanted = !row.can_release;
+        row.can_release = wanted;
         this.releaseBusy = { ...this.releaseBusy, [row.project_id]: true };
         try {
           await Api.put(`admin/companies/${this.selected.id}/projects/${row.project_id}`, {
-            can_release: !row.can_release,
+            can_release: wanted,
           });
           await this.loadProjectsPanel();
         } catch (e) {
+          row.can_release = !wanted;
           showToast(e.message || "更新失敗", "error", 0);
         } finally {
           const next = { ...this.releaseBusy };
@@ -381,29 +404,35 @@
         <template v-else>
           <header class="ui-next-page-head">
             <div>
-              <button class="btn btn-outline btn-sm" style="margin-bottom:10px" @click="closeCompany">← 返回列表</button>
+              <button class="btn btn-outline btn-sm ui-next-company-back" @click="closeCompany">← 返回列表</button>
               <h1>
                 {{ selected.name }}
-                <span v-if="selected.is_internal" class="pill pill-info" style="margin-left:6px;vertical-align:middle">內部公司</span>
+                <span v-if="selected.is_internal" class="pill pill-info">內部公司</span>
               </h1>
               <p v-if="selected.is_internal">內部公司的「內部」標記由後端一次性遷移設定，任何畫面都無法變更，此處僅供辨識。</p>
             </div>
           </header>
 
+          <!-- 四個分頁一比一對應原本直排的四個區塊。切分頁不動任何資料：四份表單都還在
+               同一個 component 的 data 裡，v-show 只是藏起來，切回去時填到一半的內容還在。 -->
+          <div class="ui-next-page-tabs" role="tablist">
+            <button v-for="item in tabs" :key="item.key" type="button" role="tab" :aria-selected="tab===item.key ? 'true' : 'false'" @click="tab=item.key">{{ item.label }}</button>
+          </div>
+
           <p v-if="detailError" class="ui-next-error-text">{{ detailError }}</p>
 
-          <section class="settings-section">
-            <h2 class="section-title">基本資料</h2>
-            <div class="conn-fields" style="padding:0 var(--space-4)">
+          <section v-show="tab==='basic'" class="ui-next-panel">
+            <h2>基本資料</h2>
+            <div class="conn-fields">
               <div class="field-item">
                 <label class="field-label">公司名稱</label>
                 <input v-model="form.name" class="field-input" />
               </div>
               <div class="field-item field-item-narrow">
                 <label class="field-label">啟用狀態</label>
-                <label style="display:flex;align-items:center;gap:6px;height:34px">
-                  <input type="checkbox" v-model="form.is_active" style="width:auto" /> 啟用
-                </label>
+                <label class="ui-next-toggle">
+                  <input type="checkbox" v-model="form.is_active">
+                  <span></span>啟用</label>
               </div>
               <div class="field-item field-item-narrow">
                 <label class="field-label">使用起日</label>
@@ -415,39 +444,44 @@
                 <span class="ui-next-field-note">目前僅能改成別的日期，無法清空回「不限期間」（後端已知限制）。</span>
               </div>
             </div>
-            <div style="padding:0 var(--space-4) var(--space-4)">
+            <div class="ui-next-panel-actions">
               <button class="btn btn-primary btn-sm" :disabled="savingBasic" @click="saveBasic">{{ savingBasic ? '儲存中…' : '儲存基本資料' }}</button>
             </div>
           </section>
 
-          <section class="settings-section">
-            <h2 class="section-title">功能開關</h2>
-            <p class="ui-next-field-note" style="padding:0 var(--space-4)">每次儲存會送出下方全部功能目前的狀態——後端整包覆蓋，不是只改被勾動的那一項。</p>
-            <div style="padding:0 var(--space-4);display:flex;flex-direction:column;gap:8px">
-              <label v-for="f in featureDefs" :key="f.key" style="display:flex;align-items:center;gap:8px">
-                <input type="checkbox" v-model="featureForm[f.key]" style="width:auto" /> {{ f.label }}
-              </label>
-              <p v-if="!featureDefs.length" style="color:var(--text-muted)">目前沒有可設定的功能。</p>
-            </div>
-            <div style="padding:var(--space-4)">
+          <section v-show="tab==='features'" class="ui-next-panel">
+            <h2>功能開關</h2>
+            <p class="ui-next-field-note">每次儲存會送出下方全部功能目前的狀態——後端整包覆蓋，不是只改被勾動的那一項。</p>
+            <label v-for="f in featureDefs" :key="f.key" class="ui-next-toggle">
+              <input type="checkbox" v-model="featureForm[f.key]">
+              <span></span>{{ f.label }}</label>
+            <p v-if="!featureDefs.length" class="ui-next-field-note">目前沒有可設定的功能。</p>
+            <div class="ui-next-panel-actions">
               <button class="btn btn-primary btn-sm" :disabled="savingFeatures || !featureDefs.length" @click="saveFeatures">{{ savingFeatures ? '儲存中…' : '儲存功能設定' }}</button>
             </div>
           </section>
 
-          <section class="settings-section">
-            <h2 class="section-title">綁定的專案</h2>
+          <section v-show="tab==='projects'" class="ui-next-panel">
+            <h2>綁定的專案</h2>
             <div class="table-wrap table-cards-sm">
               <table class="data-table">
                 <thead><tr><th>專案</th><th>可上正式</th><th>任務數</th><th></th></tr></thead>
                 <tbody v-if="projectsLoading">
-                  <tr class="empty-row"><td colspan="4" style="text-align:center;color:var(--text-muted)">載入中...</td></tr>
+                  <tr class="empty-row"><td colspan="4">載入中...</td></tr>
                 </tbody>
                 <tbody v-else>
                   <tr v-for="row in boundProjects" :key="row.project_id">
                     <td data-label="專案">{{ row.name }}</td>
                     <td data-label="可上正式">
-                      <input type="checkbox" :checked="row.can_release" :disabled="!!releaseBusy[row.project_id]"
-                             @change="toggleCanRelease(row)" style="width:auto" />
+                      <!-- 內部公司不得勾「可上正式」（後端 400，規格 §4.3）。下方「新增綁定」那顆
+                           一直是停用的，已綁定的這顆卻不是——使用者按得下去、等一輪、再吃一個紅色錯誤。
+                           條件與新增綁定那顆同一個（selected.is_internal），停用才是誠實的畫面。 -->
+                      <label class="ui-next-toggle" :title="selected.is_internal ? '內部公司的綁定不能勾這個' : null">
+                        <input type="checkbox" :checked="row.can_release"
+                               :disabled="!!releaseBusy[row.project_id] || selected.is_internal"
+                               @change="toggleCanRelease(row)">
+                        <span></span>
+                      </label>
                     </td>
                     <td data-label="任務數">{{ row.task_count }}</td>
                     <td data-label="">
@@ -462,7 +496,7 @@
                 </tbody>
               </table>
             </div>
-            <div class="conn-fields" style="padding:var(--space-4)">
+            <div class="conn-fields">
               <div class="field-item">
                 <label class="field-label">新增綁定</label>
                 <select v-model="bindProjectId" class="field-input">
@@ -472,30 +506,31 @@
               </div>
               <div class="field-item field-item-narrow">
                 <label class="field-label">可上正式</label>
-                <label style="display:flex;align-items:center;gap:6px;height:34px">
-                  <input type="checkbox" v-model="bindCanRelease" style="width:auto" :disabled="selected.is_internal" />
-                  <span v-if="selected.is_internal" class="ui-next-field-note" style="margin:0">內部公司的綁定不能勾這個</span>
+                <label class="ui-next-toggle">
+                  <input type="checkbox" v-model="bindCanRelease" :disabled="selected.is_internal">
+                  <span></span>
+                  <span v-if="selected.is_internal" class="ui-next-field-note">內部公司的綁定不能勾這個</span>
                 </label>
               </div>
-              <div class="field-item field-item-narrow" style="justify-content:flex-end;display:flex">
-                <button class="btn btn-primary btn-sm" :disabled="binding || !unboundProjects.length" @click="bindProject">
-                  {{ binding ? '綁定中…' : '綁定' }}
-                </button>
-              </div>
+            </div>
+            <div class="ui-next-panel-actions">
+              <button class="btn btn-primary btn-sm" :disabled="binding || !unboundProjects.length" @click="bindProject">
+                {{ binding ? '綁定中…' : '綁定' }}
+              </button>
             </div>
           </section>
 
-          <section class="settings-section">
-            <h2 class="section-title">GIT 憑證</h2>
-            <p style="padding:0 var(--space-4)">
+          <section v-show="tab==='git'" class="ui-next-panel">
+            <h2>GIT 憑證</h2>
+            <p>
               目前狀態：
               <span class="pill" :class="selected.has_git_pat ? 'pill-success' : 'pill-warn'">{{ selected.has_git_pat ? '已設定' : '未設定' }}</span>
               <template v-if="selected.has_git_pat && selected.git_login">（登入：{{ selected.git_login }}）</template>
             </p>
-            <p class="ui-next-field-note" style="padding:0 var(--space-4)">
+            <p class="ui-next-field-note">
               儲存前後端會實際連線這家公司綁定的每個 repo 驗證這把 PAT，可能需要幾秒鐘；改任何一個欄位都要重新輸入完整 PAT（後端不接受只改個別欄位、也從不回傳密文原文）。
             </p>
-            <div class="conn-fields" style="padding:0 var(--space-4)">
+            <div class="conn-fields">
               <div class="field-item">
                 <label class="field-label">PAT</label>
                 <input v-model="gitForm.pat" type="password" class="field-input" placeholder="重新輸入完整 PAT 才會更新" />
@@ -513,8 +548,10 @@
                 <input v-model="gitForm.email" class="field-input" />
               </div>
             </div>
-            <div v-if="gitError" class="error-msg" style="margin:0 var(--space-4) var(--space-4)">{{ gitError }}</div>
-            <div style="padding:0 var(--space-4) var(--space-4);display:flex;gap:8px">
+            <!-- 這一塊必須是常駐的紅色區塊、而且是後端原文：訊息裡會指名連不上哪個 repo，
+                 換成 toast 或「儲存失敗」等於把唯一能查的線索吃掉（見檔頭第 3 點）。 -->
+            <div v-if="gitError" class="error-msg">{{ gitError }}</div>
+            <div class="ui-next-panel-actions">
               <button class="btn btn-primary btn-sm" :disabled="savingGit" @click="saveGit">{{ savingGit ? '驗證並儲存中…' : '設定／更新 GIT 憑證' }}</button>
               <button v-if="selected.has_git_pat" class="btn btn-outline btn-sm" :disabled="clearingGit" @click="clearGit">{{ clearingGit ? '清除中…' : '清除 GIT 憑證' }}</button>
             </div>

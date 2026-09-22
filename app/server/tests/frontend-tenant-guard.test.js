@@ -43,6 +43,7 @@ const PROJECT_LIST = fs.readFileSync(path.join(pub, 'js', 'ui-next', 'pages', 'P
 const PROJECT_DETAIL = fs.readFileSync(path.join(pub, 'js', 'ui-next', 'pages', 'ProjectDetail.js'), 'utf8');
 const LOGIN = fs.readFileSync(path.join(pub, 'js', 'ui-next', 'pages', 'Login.js'), 'utf8');
 const SETTINGS = fs.readFileSync(path.join(pub, 'js', 'ui-next', 'pages', 'Settings.js'), 'utf8');
+const COMPANY_ADMIN = fs.readFileSync(path.join(pub, 'js', 'ui-next', 'pages', 'CompanyAdmin.js'), 'utf8');
 const STORE = fs.readFileSync(path.join(pub, 'js', 'store.js'), 'utf8');
 
 // routes 陣列裡每個物件以 path: "…" 開頭，切到下一個 path: 為止（同 frontend-admin-route-guard）。
@@ -627,5 +628,122 @@ describe('外殼的 isAdmin 必須是讀 UserStore 的 computed，不能是自�
   test('isAdmin 不得是 data，也不得被指派', () => {
     expect(`data 欄位: ${/\n\s*isAdmin:\s*(false|true)\s*,/.test(SHELL)}`).toBe('data 欄位: false');
     expect(`被指派: ${/this\.isAdmin\s*=/.test(SHELL)}`).toBe('被指派: false');
+  });
+});
+
+// ── 2026-09-22 公司管理頁改版：詳細畫面分頁化＋開關化 ─────────────────────────
+// 這一頁沒有 DOM 測試（本檔開頭的前提），而改版動到的兩件事都屬於「畫面說謊」那一類，
+// 只有人工點過才看得見：
+//  (a) 內部公司的「可上正式」在已綁定那一列按得下去，但後端必定 400（規格 §4.3）——
+//      使用者按了、等一輪、再吃一個紅色錯誤。停用才是誠實的畫面。
+//  (b) 那顆用的是單向 :checked：後端拒絕後若資料從頭到尾沒變過，Vue 的 vnode 比對會
+//      判定「值沒變」而不重寫 DOM property，勾勾就停在使用者按出來的（錯的）狀態。
+// 分頁本身也要釘：四個分頁是改版前四個直排區塊的一對一搬家，少一個就是一整塊設定
+// 從畫面上消失，而且不會有任何錯誤。盲區同本檔開頭（驗字面，不驗值）。
+describe('公司管理頁：詳細畫面的四個分頁與四顆開關', () => {
+  const template = (() => {
+    const start = COMPANY_ADMIN.indexOf('template: `');
+    return start < 0 ? '' : COMPANY_ADMIN.slice(start);
+  })();
+  // 清單畫面（含新增公司 modal）刻意不在範圍內：那是清單，不是設定頁。
+  // ⚠ 錨點必須連縮排一起釘：清單的「使用期間」欄位裡也有一個 <template v-else>（不限期間），
+  //    只比對字面會切在那裡，把整個 modal 一起算進詳細畫面——下面的筆數釘子第一次就是這樣紅的。
+  const detail = (() => {
+    const start = template.indexOf('\n        <template v-else>\n');
+    return start < 0 ? '' : template.slice(start);
+  })();
+
+  // 切片一律先釘 extent（本檔開頭的規矩）：切不到就不是綠燈，是守衛失效。
+  test('原始碼、template 與詳細畫面三段都切得到', () => {
+    expect(`CompanyAdmin: ${COMPANY_ADMIN.length > 10000}`).toBe('CompanyAdmin: true');
+    expect(`CompanyAdmin template: ${template.length > 5000}`).toBe('CompanyAdmin template: true');
+    expect(`CompanyAdmin 詳細畫面: ${detail.length > 3000}`).toBe('CompanyAdmin 詳細畫面: true');
+  });
+
+  // 比照同檔 ProjectDetail 的 tabKeys 釘法：字面清單撈出來逐一比對。
+  const tabKeys = (() => {
+    const m = COMPANY_ADMIN.match(/const COMPANY_TABS = (\[[\s\S]*?\n {2}\]);/);
+    return m ? [...m[1].matchAll(/key: "([a-z]+)"/g)].map((x) => x[1]) : [];
+  })();
+
+  test('分頁字面清單撈得到，四個一個不少', () => {
+    expect(tabKeys).toEqual(['basic', 'features', 'projects', 'git']);
+  });
+
+  // 清單有四個鍵、畫面只畫三塊面板，是「有分頁按鈕、按了一片空白」——
+  // 所以面板數要獨立釘，不能只驗鍵。
+  test('四個分頁各有一塊面板', () => {
+    const panels = template.match(/<section v-show="tab==='[a-z]+'" class="ui-next-panel">/g) || [];
+    expect(panels).toHaveLength(4);
+    expect(panels).toHaveLength(tabKeys.length);
+    for (const key of tabKeys) {
+      expect(`${key} 面板: ${detail.includes(`<section v-show="tab==='${key}'" class="ui-next-panel">`)}`)
+        .toBe(`${key} 面板: true`);
+    }
+  });
+
+  // 換一家公司卻停在上一家看到的分頁，畫面會讀成「資料跟著人跑了」
+  //（點開 B 公司直接落在 GIT 憑證那頁，第一眼分不出那是誰的憑證）。
+  test('openCompany 把分頁重設回 basic', () => {
+    const fn = COMPANY_ADMIN.slice(
+      COMPANY_ADMIN.indexOf('async openCompany(c)'),
+      COMPANY_ADMIN.indexOf('closeCompany()'),
+    );
+    expect(`openCompany: ${fn.length > 200}`).toBe('openCompany: true');
+    expect(`重設分頁: ${/this\.tab = "basic";/.test(fn)}`).toBe('重設分頁: true');
+  });
+
+  // 筆數釘子：四顆開關＝基本資料的「啟用」、功能開關那一排、已綁定那一列的「可上正式」、
+  // 新增綁定的「可上正式」。多一顆就是多一個沒人想過的寫入點；數字對不上時先回答新的那顆改什麼。
+  test('詳細畫面的 checkbox 全是 ui-next-toggle，而且沒有行內樣式', () => {
+    expect(detail.match(/<input type="checkbox"/g) || []).toHaveLength(4);
+    expect(detail.match(/class="ui-next-toggle"/g) || []).toHaveLength(4);
+    // 配色硬規則（platformDev skill）：行內淺色底沒指定文字色，深色模式就是隱形字。
+    expect(`行內樣式: ${detail.includes('style="')}`).toBe('行內樣式: false');
+    expect(`寫死色碼: ${/#[0-9a-fA-F]{3,8}\b/.test(detail)}`).toBe('寫死色碼: false');
+  });
+
+  // 缺陷 (a)。條件刻意與新增綁定那顆同一個字面（selected.is_internal），
+  // 同一件事有兩種寫法正是這個子專案全支審查點名過的問題。
+  test('內部公司的「可上正式」在已綁定那一列也停用，不是只有新增綁定那顆', () => {
+    const at = detail.indexOf('@change="toggleCanRelease(row)"');
+    expect(`callsite: ${at > -1}`).toBe('callsite: true');
+    const open = detail.lastIndexOf('<input', at);
+    const input = detail.slice(open, detail.indexOf('>', at) + 1);
+    expect(`停用條件: ${input.includes('selected.is_internal')}`).toBe('停用條件: true');
+    expect(`忙碌中也停用: ${input.includes('releaseBusy[row.project_id]')}`).toBe('忙碌中也停用: true');
+  });
+
+  // 缺陷 (b)。形狀抄 ProjectDetail.js 的 saveAutoDeploy（先改、失敗改回來），
+  // 不自創第二種回彈寫法。
+  test('toggleCanRelease 失敗時把勾勾改回去（單向 :checked 不會自己回彈）', () => {
+    const fn = COMPANY_ADMIN.slice(
+      COMPANY_ADMIN.indexOf('async toggleCanRelease(row)'),
+      COMPANY_ADMIN.indexOf('async unbindProject(row)'),
+    );
+    expect(`toggleCanRelease: ${fn.length > 300}`).toBe('toggleCanRelease: true');
+    expect(`先改畫面: ${/row\.can_release = wanted;/.test(fn)}`).toBe('先改畫面: true');
+    expect(`失敗改回: ${/catch[\s\S]*row\.can_release = !wanted;/.test(fn)}`).toBe('失敗改回: true');
+  });
+
+  // 改版不得碰到的兩件事，順手釘住——都是「錯了不會紅、只會在客戶端靜默生效」的形狀。
+  // saveFeatures：後端整包覆蓋，只送被勾動的那一鍵等於把其餘功能全部靜默關掉。
+  // saveGit：後端錯誤原文會指名連不上哪個 repo，換成 toast 或「儲存失敗」就把線索吃掉了。
+  test('saveFeatures 整包送出 featureForm，saveGit 失敗仍是帶原文的常駐紅色區塊', () => {
+    const features = COMPANY_ADMIN.slice(
+      COMPANY_ADMIN.indexOf('async saveFeatures()'),
+      COMPANY_ADMIN.indexOf('async bindProject()'),
+    );
+    expect(`saveFeatures: ${features.length > 200}`).toBe('saveFeatures: true');
+    expect(`整包送出: ${features.includes('{ features: { ...this.featureForm } }')}`).toBe('整包送出: true');
+
+    const git = COMPANY_ADMIN.slice(
+      COMPANY_ADMIN.indexOf('async saveGit()'),
+      COMPANY_ADMIN.indexOf('async clearGit()'),
+    );
+    expect(`saveGit: ${git.length > 300}`).toBe('saveGit: true');
+    expect(`原文進 gitError: ${/this\.gitError = e\.message \|\| "儲存失敗";/.test(git)}`).toBe('原文進 gitError: true');
+    expect(`常駐紅色區塊: ${detail.includes('<div v-if="gitError" class="error-msg">{{ gitError }}</div>')}`)
+      .toBe('常駐紅色區塊: true');
   });
 });
