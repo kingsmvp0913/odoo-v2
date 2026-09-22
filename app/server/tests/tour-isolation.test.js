@@ -318,3 +318,185 @@ describe('toast 與確認視窗吃 ui-next 的外觀', () => {
     });
   });
 });
+
+// 步驟層 adminOnly（2026-09-22）：多租戶案把「新增專案」「Repo」「同步來源對應」「執行歷程」
+// 這些控制項對一般使用者藏了起來。教程指過去時，引擎找不到 target 只會 console.warn 後退成
+// 「置中的說明框指著空氣」——不報錯、不紅燈，唯一的症狀是新人以為產品壞了。
+//
+// 本段刻意**載入引擎本體**來驗，而不是在測試裡重寫一份過濾邏輯：重寫的那份在 tour.js 被改壞時
+// 不會變紅，等於白寫。tour.js 是 IIFE，頂層只碰 window 與 Vue.reactive（document／localStorage
+// 都在方法裡才用到），所以 node 環境下給這兩個假物件就載得起來。
+describe('步驟層 adminOnly：一般使用者看到的步驟與編號', () => {
+  const loadEngine = (role) => {
+    jest.resetModules();
+    const win = { UserStore: { role } };
+    global.window = win;
+    global.Vue = { reactive: (o) => o };
+    require(path.join(publicDir, 'js/tour-courses.js'));
+    require(path.join(publicDir, 'js/tour.js'));
+    return win;
+  };
+  afterAll(() => { delete global.window; delete global.Vue; });
+
+  // TourHost 的 courses／course／step／lastIdx 是 Vue computed，彼此以 this 互相引用。
+  // 用 getter 兜一個假 this 直接呼叫它們＝驗的是使用者真的會看到的那條計算路徑，
+  // 不是測試自己算的另一套。
+  const hostCtx = (win, courseId, stepIdx) => {
+    // tour.js 的 IIFE 在**呼叫當下**才解析 window（讀 UserStore.role），所以要驗哪一個角色，
+    // 就得先把 global.window 換成那一份；少了這行，兩個角色會共用最後載入的那個 window，
+    // 而「兩邊算出來一樣」看起來像過濾沒生效，不像測試自己搭錯棚。
+    global.window = win;
+    const c = win.TourHost.computed;
+    const ctx = { state: { courseId, stepIdx } };
+    ['courses', 'course', 'step', 'lastIdx'].forEach((k) => {
+      // getter 是惰性的，求值時 global.window 可能已被另一個角色的 ctx 換掉 → 每次都重綁
+      Object.defineProperty(ctx, k, { get: () => { global.window = win; return c[k].call(ctx); } });
+    });
+    return ctx;
+  };
+
+  const ADMIN = loadEngine('admin');
+  const USER = loadEngine('user');
+  const authored = ADMIN.TOUR_COURSES;
+
+  test('載得到引擎與課程（載入失敗時不得靜默通過）', () => {
+    expect(typeof ADMIN.TourHost).toBe('object');
+    expect(authored.length).toBeGreaterThanOrEqual(8);
+    const totalSteps = authored.reduce((n, c) => n + c.steps.length, 0);
+    expect(totalSteps).toBeGreaterThanOrEqual(50);
+  });
+
+  test('確實有步驟被標記（全部沒標時等於本機制沒上線，不得靜默通過）', () => {
+    const marked = authored.flatMap(c => c.steps.filter(s => s.adminOnly).map(s => `${c.id}/${s.title}`));
+    expect(marked.length).toBeGreaterThanOrEqual(3);
+  });
+
+  test('一般使用者拿到的課程裡，一步 adminOnly 都不剩', () => {
+    const offenders = hostCtx(USER, null, 0).courses
+      .flatMap(c => c.steps.filter(s => s.adminOnly).map(s => `${c.id}/${s.title}`));
+    expect(offenders).toEqual([]);
+  });
+
+  test('過濾不得改動原始課程定義（重算一次就少一步的話，教程會越上越短）', () => {
+    const before = authored.find(c => c.id === 'project').steps.length;
+    hostCtx(USER, null, 0).courses;   // 再算一次
+    hostCtx(USER, null, 0).courses;
+    expect(ADMIN.TOUR_COURSES.find(c => c.id === 'project').steps.length).toBe(before);
+  });
+
+  // ── 編號：濾掉步驟會改變「第幾步是哪一步」。說明框印的是
+  // 「{{ state.stepIdx + 1 }} / {{ course.steps.length }}」，而 course 來自 visibleCourses()，
+  // 所以分子分母與 step 取值必須出自同一個過濾後的陣列，否則就是無聲的 off-by-one。
+  test('說明框的分子分母與進度條都讀同一個 course.steps（改成讀原始課程就要紅）', () => {
+    const src = read('js/tour.js');
+    expect(src).toContain('{{ state.stepIdx + 1 }} / {{ course.steps.length }}');
+    expect(src).toContain('(state.stepIdx + 1) / course.steps.length * 100');
+    expect(src).toContain('courses() { return visibleCourses(); }');
+    expect(src).toContain('this.course.steps[this.state.stepIdx]');
+    expect(src).toContain('this.course.steps.length - 1');
+  });
+
+  test('「專案」課：管理員 6 步，一般使用者 3 步且沒有空洞', () => {
+    const admin = hostCtx(ADMIN, 'project', 0);
+    expect(admin.course.steps.length).toBe(6);
+    expect(admin.lastIdx).toBe(5);
+
+    const user = hostCtx(USER, 'project', 0);
+    const targets = user.course.steps.map(s => s.target);
+    expect(targets).toEqual([
+      '[data-tour="nav-projects"]',
+      '[data-tour="pd-env"]',
+      '[data-tour="pd-tools"]'
+    ]);
+    expect(user.lastIdx).toBe(2);
+    // 逐格取值：第 n 步顯示的內容必須就是過濾後的第 n 個，不能跳號
+    targets.forEach((target, i) => {
+      expect(hostCtx(USER, 'project', i).step.target).toBe(target);
+    });
+    // 最後一步的下一格必須是空的——否則「完成」鈕會出現在還有內容的地方
+    expect(hostCtx(USER, 'project', 3).step).toBeUndefined();
+  });
+
+  test('每一門可見課程從第 1 步走到 lastIdx 都取得到步驟（任一格空掉＝編號錯位）', () => {
+    const courses = hostCtx(USER, null, 0).courses;
+    expect(courses.length).toBeGreaterThanOrEqual(6);
+    courses.forEach((c) => {
+      const ctx0 = hostCtx(USER, c.id, 0);
+      expect(`${c.id}:${ctx0.lastIdx}`).toBe(`${c.id}:${c.steps.length - 1}`);
+      for (let i = 0; i <= ctx0.lastIdx; i += 1) {
+        const step = hostCtx(USER, c.id, i).step;
+        expect(step ? `${c.id}#${i + 1}` : `${c.id}#${i + 1} 取不到步驟`).toBe(`${c.id}#${i + 1}`);
+      }
+    });
+  });
+
+  test('步驟全被濾掉的課程不出現在選單（空課點進去是一個沒有內容的說明框）', () => {
+    const win = loadEngine('user');
+    win.TOUR_COURSES.push({
+      id: 'all-admin-probe', name: '探針', desc: '全部步驟都是管理員限定',
+      steps: [{ adminOnly: true, route: '/', target: '[data-tour="x"]', title: 'x' }]
+    });
+    expect(hostCtx(win, null, 0).courses.map(c => c.id)).not.toContain('all-admin-probe');
+    expect(win.TourManager.remainingCount()).toBe(hostCtx(win, null, 0).courses.length);
+  });
+
+  // ── 對帳：哪些錨點在原始碼裡就掛著 isAdmin。自動掃出來而不是寫死清單——
+  // 寫死的清單會在下一個功能被藏起來時腐爛成假事實（本檔開頭那份檔案清單就是前車之鑑）。
+  describe('掛著 isAdmin 的錨點，課程要嘛標了 adminOnly，要嘛是列名的例外', () => {
+    const NEXT_DIR = path.join(publicDir, 'js/ui-next');
+    const walk = (dir) => fs.readdirSync(dir, { withFileTypes: true }).flatMap((e) => {
+      const full = path.join(dir, e.name);
+      return e.isDirectory() ? walk(full) : (e.name.endsWith('.js') ? [full] : []);
+    });
+    // 同一個標籤上同時有 v-if="isAdmin…" 與 data-tour="…"（順序不拘）
+    const gated = new Set();
+    for (const f of walk(NEXT_DIR)) {
+      const src = fs.readFileSync(f, 'utf8');
+      for (const tag of src.match(/<[a-zA-Z][^>]*>/g) || []) {
+        if (!/v-if="isAdmin/.test(tag)) continue;
+        const m = tag.match(/data-tour="([^"]+)"/);
+        if (m) gated.add(m[1]);
+      }
+    }
+
+    test('掃得到掛 isAdmin 的錨點（regex 失效時不得靜默通過）', () => {
+      expect([...gated].sort()).toEqual(['proj-add', 'td-events-open']);
+    });
+
+    // 例外要在這裡列名並寫理由，不能默默放過。
+    // td-events-open：這一步真正教的是「這四關不用你出手」，對所有角色都成立；而且「實際流程」
+    // 課的標題寫死了 ①～⑨，濾掉第 ⑤ 步會變成 ①②③④⑥⑦⑧⑨ 配「5 / 8」，補救得改標題＝改內容。
+    // 使用者尚未裁決，所以刻意留著；要收掉時連標題編號一起處理。
+    const EXEMPT = new Set(['td-events-open']);
+
+    test.each([...gated])('用到 %s 的步驟都標了 adminOnly（或列名豁免）', (anchor) => {
+      const sel = `[data-tour="${anchor}"]`;
+      const users = authored.flatMap(c => c.steps
+        .filter(s => s.target === sel || s.click === sel)
+        .map(s => ({ where: `${c.id}/${s.title}`, ok: !!(c.adminOnly || s.adminOnly) })));
+      expect(users.length).toBeGreaterThan(0);
+      const bad = users.filter(u => !u.ok && !EXEMPT.has(anchor)).map(u => u.where);
+      expect(bad).toEqual([]);
+    });
+  });
+
+  // pd-repos／pd-mapping 的 isAdmin 掛在祖先（分頁列 tabs() 與整塊 section）上，上面那段掃不到，
+  // 所以把「這兩個分頁是管理員限定」這個事實單獨釘住——分頁改成全開時這裡會紅，提醒回來鬆綁。
+  describe('ProjectDetail 的管理員限定分頁與對應步驟', () => {
+    const src = () => read('js/ui-next/pages/ProjectDetail.js');
+
+    test('tabs() 仍以 isAdmin() 濾掉 repos／db／settings', () => {
+      expect(src()).toContain('if (key === "repos" || key === "db" || key === "settings") return this.isAdmin();');
+    });
+
+    test.each([
+      ['pd-repos', 'repos'],
+      ['pd-mapping', 'settings']
+    ])('%s（%s 分頁）那一步標了 adminOnly', (anchor) => {
+      const sel = `[data-tour="${anchor}"]`;
+      const hits = authored.flatMap(c => c.steps.filter(s => s.target === sel).map(s => ({ where: `${c.id}/${s.title}`, ok: !!s.adminOnly })));
+      expect(hits.length).toBe(1);
+      expect(hits.filter(h => !h.ok).map(h => h.where)).toEqual([]);
+    });
+  });
+});

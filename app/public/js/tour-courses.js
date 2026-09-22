@@ -10,7 +10,10 @@
 //   placement    說明框方位偏好；塞不下時引擎會自己換邊
 //   interactive  允許使用者真的點光圈裡的東西（預設擋住，避免在示範資料上打真 API）
 //   warn         補充提醒，會渲染成說明框底部的提示區塊
-//   adminOnly    課程走到的路由有 requiresAdmin（報表、管理員設定）→ 非管理員連選單都不該看到
+//   adminOnly    非管理員看不到。課程層＝整課走到的路由有 requiresAdmin（報表、管理員設定）；
+//                步驟層＝這一步的 target（或 click 要按的那顆）掛著 v-if="isAdmin"，
+//                一般使用者指過去只會得到一個懸空的說明框。兩層同名同義，由 tour.js 的
+//                visibleCourses() 一起濾掉，濾完的步數就是「共幾步」，不會算錯第幾步。
 window.TOUR_COURSES = [
   {
     id: 'intro',
@@ -88,6 +91,10 @@ window.TOUR_COURSES = [
         text: 'AI 寫完程式要<strong>用你的身分</strong>推上 GitHub。沒給權杖，任務就停在這裡不動。<br><br>照卡片裡四個步驟做，或直接點<strong>「↗ 開啟 GitHub 建立權杖頁」</strong>——網址已經預帶好 <strong>repo</strong> 權限。'
       },
       {
+        // ⚠ set-odoo／set-eservice 這兩步藏在 v-if="userStore.features.odoo_sync"（Settings.js）
+        // 底下，沒開這個功能的公司整區不渲染 —— 但那是**公司功能開關**，不是角色：
+        // 開了的公司裡一般使用者看得到，沒開的公司裡管理員也看不到。標 adminOnly 會兩邊都錯。
+        // 要收掉得另做一個「功能開關」層級的條件，不在本次授權範圍內，先記錄在此。
         route: '/settings',
         click: '[data-tour="set-tab-connection"]',
         target: '[data-tour="set-odoo"]',
@@ -134,6 +141,9 @@ window.TOUR_COURSES = [
         text: '專案是容器：repo、測試環境、任務全掛在它底下。<br><br>接下來幾步用一個<strong>示範專案</strong>帶你看，你自己的資料不會被動到。'
       },
       {
+        // 「+ 新增專案」掛 v-if="isAdmin()"（ProjectList.js）——POST /api/projects 是
+        // requirePlatformAdmin，一般使用者連鈕都看不到，click 按不到、表單也就展不開。
+        adminOnly: true,
         route: '/projects',
         click: '[data-tour="proj-add"]',
         target: '[data-tour="proj-form"]',
@@ -141,6 +151,9 @@ window.TOUR_COURSES = [
         text: '按右上角「+ 新增專案」就會展開這張表單。<br><br><strong>專案名稱用中文時，英文資料夾名稱是必填的</strong>——這是最多人卡住的地方，資料夾與測試資料庫都用它命名。'
       },
       {
+        // Repo 分頁對一般使用者整個不存在（ProjectDetail.js 的 tabs() 以 isAdmin() 過濾），
+        // 連 ?tab=repos 都會被 watch 改回 chat，整塊面板另有 isAdmin() 的縱深防禦。
+        adminOnly: true,
         route: '/projects/demo?tab=repos',
         target: '[data-tour="pd-repos"]',
         title: '接上程式碼來源',
@@ -148,6 +161,11 @@ window.TOUR_COURSES = [
         warn: '主分支「建立後不能再改」——ai-dev 已經長在那條分支上，改設定不會讓它搬家。選錯只能把 repo 移除後重新新增。'
       },
       {
+        // 「設定」分頁同上：tabs() 以 isAdmin() 過濾，整個 settings 區塊還有第二層 isAdmin()。
+        // 代價：一般使用者因此不會被告知「來源對應沒設，Odoo／客服的工單就不會進來」——
+        // 這句話對他有用（解釋工單為何沒出現），但那個表單他永遠填不到。這是內容取捨，
+        // 若要保留這個知識，該做的是把它寫進別的步驟，而不是留一個指空氣的說明框。
+        adminOnly: true,
         route: '/projects/demo?tab=settings',
         target: '[data-tour="pd-mapping"]',
         title: '這一步不做，任務永遠不會進來',
@@ -350,6 +368,13 @@ window.TOUR_COURSES = [
         text: '同一個位置換成了規格審核。這是動工前<strong>最後一次改方向的機會</strong>，按下去就開始寫程式了。<br><br>看不懂或覺得不對，寫在意見欄送回去，它會改完再問一次。'
       },
       {
+        // ⚠ 刻意**沒有**標 adminOnly，雖然 td-events-open 掛著 v-if="isAdmin"（TaskDetail.js）、
+        // 一般使用者按不到那顆「執行歷程」，這一步對他們是懸空的說明框。不標的兩個理由：
+        //   1. 這一步真正要教的是「開發／QA／部署／測試這四關不用你出手」，對所有角色都成立；
+        //      整步藏掉等於把這個結論一起藏掉，只有「即時歷程」那半句是管理員限定。
+        //   2. 本課的標題寫死了 ①～⑨，濾掉第 ⑤ 步會讓一般使用者看到
+        //      ①②③④⑥⑦⑧⑨ 配「5 / 8」——要補就得重寫後面四步的標題，那是內容決定。
+        // 兩條路都有代價，留給使用者裁決；要收掉時記得連標題編號一起處理。
         route: '/task/demo',
         demoStatus: 'coding_running',
         click: '[data-tour="td-events-open"]',

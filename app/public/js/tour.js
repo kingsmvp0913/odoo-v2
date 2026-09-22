@@ -35,10 +35,25 @@
   // 管理員限定的課程（報表、管理員設定、資料庫查詢）對一般使用者連選單都不該出現——
   // 那幾頁的路由本來就有 requiresAdmin，教程帶過去只會被導回首頁。
   // 讀 UserStore.role（reactive）→ 呼叫端的 computed 會在角色載入後自動重算。
+  //
+  // 步驟層用**同一個欄位名** adminOnly：多租戶案把「新增專案」「Repo」「同步來源對應」
+  // 「執行歷程」這些控制項對一般使用者藏起來後，指過去的那幾步只會得到一個懸空的說明框
+  // （找不到 target 時引擎退成置中，不報錯、不紅燈），教到的是「這個產品壞了」。
+  // 同一件事不發明第二個名字，看到 adminOnly 就是「管理員才看得到」，課程與步驟一致。
+  //
+  // ⚠ 過濾一定要做在這裡——這是課程清單的唯一出口。引擎的 stepIdx、lastIdx、進度條、
+  // 說明框的「第幾步 / 共幾步」、選單的「N 步」全部讀 course.steps，在這裡就把 steps
+  // 換成過濾後的陣列，下游一行都不必改，也不可能出現「第 3 步卻顯示 4」的 off-by-one。
+  // 回傳淺拷貝：原始的 window.TOUR_COURSES 不得被改動，否則每重算一次就再濾掉一輪。
   function visibleCourses() {
     const all = window.TOUR_COURSES || [];
     const isAdmin = !!(window.UserStore && window.UserStore.role === 'admin');
-    return isAdmin ? all : all.filter(c => !c.adminOnly);
+    if (isAdmin) return all;
+    return all
+      .filter(c => !c.adminOnly)
+      .map(c => (c.steps.some(s => s.adminOnly) ? Object.assign({}, c, { steps: c.steps.filter(s => !s.adminOnly) }) : c))
+      // 整課的步驟都被濾光時不能留下一門空課：選單上會出現「0 步」，點進去是一個沒有內容的說明框
+      .filter(c => c.steps.length > 0);
   }
   function remainingCount() {
     void state.doneVersion; // 建立 reactive 依賴
