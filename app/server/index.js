@@ -390,6 +390,15 @@ if (require.main === module) {
         console.log(`[STARTUP] 中斷升級清理：重啟 ${s.restarted}／略過 ${s.skipped}／失敗 ${s.failed}／超預算 ${s.overBudget}`);
       }
     } catch (e) { console.error('[STARTUP] 中斷升級清理:', e.message); }
+    // 平台更版（規格 §3.2）：測試區的 Odoo 連的是平台容器裡那顆 postgres，平台一重啟它們的 DB
+    // 連線就瞬斷，**cron 執行緒會永久死掉**——容器還在、畫面正常，只是排程從此不動。客戶說
+    // 「測試區開著但什麼都不動」就是這個。重啟前落 DB 的那份清單在這裡兌現（見 pipeline/release.js）。
+    // 排在 startCron() 之前：與其他開機收尾同一段，不另開啟動鉤子。
+    // 與上一步的重疊（同一專案剛因中斷升級被重啟過）只是多重啟一次，救回來的結果相同，
+    // 不值得為此在兩個模組之間傳遞已重啟清單。
+    try {
+      await require('./pipeline/release').reviveRunningEnvs();
+    } catch (e) { console.error('[STARTUP] 更版後重開測試區:', e.message); }
     // 子專案 0：被重啟打斷的 AI 容器不會跟著死（不像子行程），不清的話會繼續燒錢、
     // 與 cron 重派的同一關並寫同一個 worktree。必須在 startCron() 之前。
     // 取不到實例 id 時一個都不刪（見 lib/agent-orphans.js）。

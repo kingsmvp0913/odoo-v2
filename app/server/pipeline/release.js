@@ -77,6 +77,139 @@ async function pendingReleases() {
   return rows;
 }
 
+/* ────────────────────────────────────────────────────────────────────────────
+ * 重啟後把「原本在跑的測試區」救回來（規格 §3.2）
+ *
+ * 測試區容器的 Odoo 連的是**平台容器裡那顆 postgres**，所以平台一重啟，所有測試區的 DB 連線
+ * 同時瞬斷。HTTP 與 bus 會自癒（bus 睡 50 秒後接回來），**cron 執行緒不會**：例外從
+ * `_bootstrap_inner` 逃出去，執行緒就沒了，要整個 Odoo 重開才回得來（2026-09-10 萊峰19 實測，
+ * 06:18 死後 30 分鐘零排程）。客戶看到的是「測試區還開著但什麼都不動」——比整個關掉更難查。
+ *
+ * 以前重啟是稀有事件、有人在旁邊看；從現在起每週末 02:00 自動跑一次，沒有人在。
+ *
+ * ⚠ 清單為什麼一定要在重啟**之前**落 DB，不能重啟完再掃：
+ *   - 行程活不過重啟，記憶體不是選項；
+ *   - 重啟完才掃的話，「當時在跑、但已經被連帶收掉」與「本來就沒在跑」長得一模一樣，
+ *     那一台就這樣靜靜地漏掉——而漏掉的症狀正好就是「什麼都不動」，沒有人會發現。
+ * ──────────────────────────────────────────────────────────────────────────── */
+
+// 逐台重開的整體預算。restartEnv 內含 waitForPort（ENV_HEALTH_TIMEOUT_MS 預設 90 秒）且序列做，
+// 而這段跑在平台還沒 listen 之前——十台全部卡滿就是十五分鐘對所有人停擺。
+// 超出預算就停手並把還沒救到的那幾台大聲記下來：那幾台只是維持現況（cron 仍是死的），
+// 不會比不做這件事更糟，但啟動不能被它拖垮。比照 startup-recovery.js 的同一道取捨。
+const ENV_REVIVE_BUDGET_MS = parseInt(process.env.ENV_REVIVE_BUDGET_MS || '180000', 10);
+
+/**
+ * 把「此刻正在跑的測試區」記進 DB，供重啟回來之後兌現。
+ *
+ * 存 teams_settings 的單列設定而不是新開一張表：這是更版機制自己的狀態，和
+ * release_last_window／release_last_result 同一個層級、同一個生命週期（寫一次、用一次、清掉）。
+ */
+async function captureRunningEnvs() {
+  // 排序只是為了讓「預算用盡時被跳過的是哪幾台」可預期（也讓測試盯得住），不影響語意。
+  const { rows } = await query(
+    "SELECT project_id FROM odoo_envs WHERE status='running' ORDER BY project_id");
+  const ids = rows.map(r => r.project_id).filter(id => id !== null && id !== undefined);
+  await query(
+    `INSERT INTO teams_settings (id, release_envs_to_revive) VALUES (1, $1)
+       ON CONFLICT (id) DO UPDATE SET release_envs_to_revive = $1`, [JSON.stringify(ids)]);
+  return ids;
+}
+
+async function readEnvsToRevive() {
+  try {
+    const { rows } = await query('SELECT release_envs_to_revive FROM teams_settings WHERE id = 1');
+    const raw = rows[0] && rows[0].release_envs_to_revive;
+    if (!raw) return [];
+    const ids = typeof raw === 'string' ? JSON.parse(raw) : raw;
+    return Array.isArray(ids) ? ids.filter(id => Number.isInteger(id)) : [];
+  } catch (err) {
+    // 欄位還沒建、或內容壞掉：當成沒有清單。這裡 throw 會擋住整個平台啟動，代價遠大於少救幾台。
+    console.error('[RELEASE] 讀不到待重開的測試區清單，本次不重開：', err.message);
+    return [];
+  }
+}
+
+async function clearEnvsToRevive() {
+  await query(
+    `INSERT INTO teams_settings (id, release_envs_to_revive) VALUES (1, NULL)
+       ON CONFLICT (id) DO UPDATE SET release_envs_to_revive = NULL`);
+}
+
+/**
+ * 把失敗留在人看得到的地方。這台沒有 webhook 也沒有 Teams（裁決二），畫面是唯一的通道，
+ * 而 release_last_result 就是更版頁讀的那一筆——附掛上去，不另開一個沒有人會去看的欄位。
+ * 寫失敗只記 log：這是通知，不是救援本身，不得反過來擋住啟動。
+ */
+async function recordEnvReviveResult(envRevive) {
+  const prev = await lastReleaseResult();
+  // 沒有上一筆（例如人工直接按重啟、沒走維護時段）也要留下時間，否則畫面上看不出這是哪一次的事。
+  const record = { ...(prev || { at: new Date().toISOString() }), envRevive };
+  await query(
+    `INSERT INTO teams_settings (id, release_last_result) VALUES (1, $1)
+       ON CONFLICT (id) DO UPDATE SET release_last_result = $1`, [JSON.stringify(record)]);
+}
+
+/**
+ * 啟動時兌現那份清單：逐一重開，把測試區 Odoo 的 cron 執行緒救回來。
+ *
+ * 由 index.js 在 startCron() 之前呼叫（與其他開機收尾同一段，不另開啟動鉤子）。
+ *
+ * ⚠ 一台失敗不得影響其他台：這裡每一台各自 try/catch。整個迴圈一起 throw 的話，
+ * 「一台有毛病」會變成「全部都沒救回來」，而且症狀一樣是安靜的。
+ *
+ * 清單在**全部處理完之後**才清：中途被再一次重啟打斷時，下次開機還救得到剩下的。
+ * 期間被人工停掉的測試區不會被誤開——restartEnv 只重啟「容器還在跑」的環境（容器沒在跑時
+ * 回 `{ ok:false, skipped:'not_running' }`），它不會把停掉的環境重新拉起來。
+ *
+ * deps 供測試注入（restartEnv／now）。
+ */
+async function reviveRunningEnvs(deps = {}) {
+  const restartEnv = deps.restartEnv || require('./env-agent').restartEnv;
+  const now = deps.now || (() => Date.now());
+  const budgetMs = deps.budgetMs ?? ENV_REVIVE_BUDGET_MS;
+
+  const ids = await readEnvsToRevive();
+  const stats = { total: ids.length, revived: 0, skipped: 0, failed: 0, overBudget: 0, failures: [] };
+  if (!ids.length) return stats;
+
+  const startedAt = now();
+  for (const projectId of ids) {
+    if (now() - startedAt >= budgetMs) {
+      stats.overBudget++;
+      stats.failures.push({ projectId, error: `啟動預算 ${budgetMs}ms 用盡，未重開` });
+      console.error(`[STARTUP] 專案 ${projectId} 的測試區未重開（啟動預算用盡）：排程（cron）仍是停的，請人工重啟該測試區`);
+      continue;
+    }
+    try {
+      const r = await restartEnv(projectId);
+      if (r && r.ok) {
+        stats.revived++;
+        console.log(`[STARTUP] 專案 ${projectId} 的測試區已重開，排程（cron）執行緒恢復`);
+      } else {
+        // 容器已經不在跑＝這台本來就沒東西要救（多半是這段期間被人工停掉或被閒置回收）。
+        stats.skipped++;
+      }
+    } catch (e) {
+      stats.failed++;
+      stats.failures.push({ projectId, error: e.message });
+      // 這一行與下面寫進 release_last_result 的那一筆，是這件事唯一會留下來的痕跡。
+      console.error(`[STARTUP] 專案 ${projectId} 的測試區重開失敗，排程（cron）仍是停的：${e.message}`);
+    }
+  }
+  // 清單一定要清掉：不清的話下一次重啟會再照著這份舊清單重開一輪，把這段期間被刻意停掉的
+  // 測試區也一起翻出來（就算 restartEnv 擋得住，也等於每次開機都白跑一輪）。
+  await clearEnvsToRevive()
+    .catch(err => console.error('[STARTUP] 清待重開測試區清單失敗：', err.message));
+  if (stats.failed || stats.overBudget) {
+    await recordEnvReviveResult(stats)
+      .catch(err => console.error('[STARTUP] 記錄測試區重開結果失敗：', err.message));
+  }
+  console.log('[STARTUP] 更版後重開測試區：成功 %d／略過 %d／失敗 %d／超預算 %d（共 %d 台）',
+    stats.revived, stats.skipped, stats.failed, stats.overBudget, stats.total);
+  return stats;
+}
+
 /**
  * 真的重啟平台，讓已經合併的碼生效。
  *
@@ -146,14 +279,25 @@ async function restartNow(opts = {}) {
     await query(`UPDATE finding_fixes SET status='released' WHERE id=$1`, [r.id]);
   }
 
-  console.log('[RELEASE] 重啟平台容器 %s 讓 %d 筆已合併的修正生效', container, releases.length);
+  // ⚠ 與上面的標記同一個理由，而且這一份更嚴格：清單**只有現在**問得到。重啟之後再掃，
+  // 「當時在跑、被連帶收掉」與「本來就沒在跑」就再也分不出來了（見 captureRunningEnvs 檔頭）。
+  // 記不下來也照樣重啟：更版本身不該被這件事擋住，但要留下這行字說明哪幾台不會被救回來。
+  let envsToRevive = [];
+  try {
+    envsToRevive = await captureRunningEnvs();
+  } catch (err) {
+    console.error('[RELEASE] 記不下執行中的測試區清單，重啟後不會自動重開它們（排程會停）：', err.message);
+  }
+
+  console.log('[RELEASE] 重啟平台容器 %s 讓 %d 筆已合併的修正生效（重啟後要重開 %d 個測試區）',
+    container, releases.length, envsToRevive.length);
   setTimeout(() => {
     execFile('docker', ['restart', container], err => {
       if (err) console.error('[RELEASE] restart:', err.message);
     });
   }, RESTART_DELAY_MS);
   return { restarted: true, testsPassed: opts.skipTests ? null : true, tests,
-    reason: null, container, released: releases.length };
+    reason: null, container, released: releases.length, envsToRevive: envsToRevive.length };
 }
 
 /* ────────────────────────────────────────────────────────────────────────────
@@ -372,6 +516,9 @@ async function releaseTick(deps = {}) {
       released: result.released ?? 0,
       pending: pending.length,
       aborted,
+      // 重啟後要重開幾台測試區。更版頁靠它與後面補上的 envRevive 對照：記了 3 台、回來只救回 2 台，
+      // 差額就是那台還在「開著但什麼都不動」的環境。
+      envsToRevive: result.envsToRevive ?? 0,
       summary: (result.tests && result.tests.summary) || null,
     };
     await recordReleaseResult(record)
@@ -389,6 +536,7 @@ async function releaseTick(deps = {}) {
 
 module.exports = {
   pendingReleases, restartNow,
+  captureRunningEnvs, readEnvsToRevive, reviveRunningEnvs,
   releaseTick, releaseWindowConfig, lastReleaseResult, readLastWindow,
   DEFAULT_RELEASE_WINDOW, RELEASE_ABORT_BEFORE_END_MS,
 };

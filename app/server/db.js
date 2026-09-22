@@ -1155,6 +1155,11 @@ async function migrate() {
     { table: 'teams_settings', col: 'release_window', sql: 'ALTER TABLE teams_settings ADD COLUMN release_window TEXT' },
     { table: 'teams_settings', col: 'release_last_window', sql: 'ALTER TABLE teams_settings ADD COLUMN release_last_window TEXT' },
     { table: 'teams_settings', col: 'release_last_result', sql: 'ALTER TABLE teams_settings ADD COLUMN release_last_result TEXT' },
+    // release_envs_to_revive：重啟**前**記下來的「當時正在跑的測試區」（JSON 的 project_id 陣列）。
+    //   ⚠ 必須落 DB 且必須在重啟前寫：平台一重啟，測試區 Odoo 的 cron 執行緒會永久死掉（容器還在、
+    //   畫面正常，只是排程從此不動），而重啟之後再掃，「當時在跑、已被連帶收掉」與「本來就沒在跑」
+    //   完全分不出來。開機時由 pipeline/release.js 的 reviveRunningEnvs 兌現並清空。
+    { table: 'teams_settings', col: 'release_envs_to_revive', sql: 'ALTER TABLE teams_settings ADD COLUMN release_envs_to_revive TEXT' },
     // 子專案 0：AI 容器隔離的開關與資源上限。mode 預設 off——合併進 master 不改變任何行為。
     // 上限三個（agent 與閘道各一組）沒設就不准跑容器（總覽 D6），值由量測後管理員寫入，不在這裡猜。
     { table: 'teams_settings', col: 'agent_sandbox_mode', sql: "ALTER TABLE teams_settings ADD COLUMN agent_sandbox_mode TEXT DEFAULT 'off'" },
