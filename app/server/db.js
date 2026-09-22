@@ -536,7 +536,8 @@ async function migrate() {
     `CREATE TABLE IF NOT EXISTS finding_fixes (
       id           SERIAL PRIMARY KEY,
       finding_id   INTEGER NOT NULL REFERENCES health_check_findings(id) ON DELETE CASCADE,
-      status       TEXT NOT NULL DEFAULT 'running',  -- running | ready | no_change | rejected | failed | adopted | pushed | merged
+      -- merged＝碼已進 master、只差重啟（＝更版頁的待更版清單）；released＝重啟過、新碼真的在跑
+      status       TEXT NOT NULL DEFAULT 'running',  -- running | ready | no_change | rejected | failed | adopted | pushed | merged | released
       branch       TEXT,
       worktree     TEXT,
       diff         TEXT,

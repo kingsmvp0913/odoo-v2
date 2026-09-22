@@ -1,6 +1,7 @@
-// 意圖：「合併並套用」會把碼推上 origin 再重啟整個平台——這是本專案唯一一顆會停掉自己的按鈕。
-// 釘住的是三道不能被繞過的守衛：不在主分支不動、會被一起帶走的髒東西不動、有任務在飛就不重啟。
-// 任一道失守的代價分別是：合併到錯的分支、把別人的工作一起 commit、砍掉在跑的 agent。
+// 意圖：「合併並套用」會把碼推上 origin——**到此為止**。重啟已經拆給維護時段（pipeline/release.js，
+// 規格 §4.3 ＋ 09-15 R6），所以這支從此還要釘住「applyFix 不重啟、也不宣告處置完成」。
+// 釘住的是兩道不能被繞過的守衛：不在主分支不動、會被一起帶走的髒東西不動。
+// 任一道失守的代價分別是：合併到錯的分支、把別人的工作一起 commit。
 // 第二道刻意只擋「已暫存」與「與這次要合併的檔重疊」——擋過頭的代價同樣真實：2026-09-08 一個
 // 不相干的檔沒提交，當晚五組修正一組都沒併進去，而畫面上只留一行「留待下批重試」。
 const os = require('os');
@@ -60,13 +61,13 @@ beforeEach(() => {
 
 test('不在主分支就不合併：主 clone 停在別的分支時代為切換等於替別人做決定', async () => {
   gitBranch = 'testing';
-  await expect(applyFix(1, 2, [])).rejects.toThrow(/testing/);
+  await expect(applyFix(1, 2)).rejects.toThrow(/testing/);
   expect(calls().some(c => c.includes('merge'))).toBe(false);
 });
 
 test('staged 的變更就不合併：git add 過的東西會被一起包進 merge commit', async () => {
   gitDirty = 'M  app/server/other-work.js\n';   // 第一欄＝index
-  await expect(applyFix(1, 2, [])).rejects.toThrow(/暫存/);
+  await expect(applyFix(1, 2)).rejects.toThrow(/暫存/);
   expect(calls().some(c => c.includes('merge --no-ff'))).toBe(false);
 });
 
@@ -79,7 +80,7 @@ test('暫存區只剩殘影（內容＝HEAD）→ 限定路徑同步回 HEAD，�
   headBlobs = { 'app/package.json': 'b1', 'app/jest.setup.js': 'b2' };
   workBlobs = { 'app/package.json': 'b1', 'app/jest.setup.js': 'b2' };
   mergeFiles = 'app/package.json\n';
-  const r = await applyFix(1, 2, [{ taskId: 1, userId: 2, startedAt: Date.now() }]);
+  const r = await applyFix(1, 2);
   expect(r).toMatchObject({ merged: true });
   const seq = calls();
   const reset = seq.indexOf('git reset -q -- app/package.json app/jest.setup.js');
@@ -91,7 +92,7 @@ test('殘影混著真的暫存 → 照樣擋下、只點名真的那個，暫存
   gitDirty = 'MM app/package.json\nM  app/server/other-work.js\n';
   headBlobs = { 'app/package.json': 'b1' };
   workBlobs = { 'app/package.json': 'b1' };
-  const err = await applyFix(1, 2, []).catch(e => e);
+  const err = await applyFix(1, 2).catch(e => e);
   expect(err.message).toMatch(/other-work\.js/);
   expect(err.message).not.toMatch(/package\.json/);
   expect(calls().some(c => c.startsWith('git reset'))).toBe(false);
@@ -104,7 +105,7 @@ test('殘影混著真的暫存 → 照樣擋下、只點名真的那個，暫存
 test('只有工作區改動、且不碰這次要合併的檔 → 照常合併', async () => {
   gitDirty = ' M .claude/agents/chat.md\n';
   mergeFiles = 'app/server/pipeline/runner.js\napp/server/pipeline/spec-version.js\n';
-  const r = await applyFix(1, 2, [{ taskId: 1, userId: 2, startedAt: Date.now() }]);
+  const r = await applyFix(1, 2);
   expect(r).toMatchObject({ merged: true });
   expect(calls().some(c => c.includes('merge --no-ff'))).toBe(true);
 });
@@ -112,56 +113,58 @@ test('只有工作區改動、且不碰這次要合併的檔 → 照常合併', 
 test('工作區改動與要合併的檔重疊 → 擋下，並指名是哪個檔', async () => {
   gitDirty = ' M app/server/pipeline/runner.js\n';
   mergeFiles = 'app/server/pipeline/runner.js\n';
-  await expect(applyFix(1, 2, [])).rejects.toThrow(/runner\.js/);
+  await expect(applyFix(1, 2)).rejects.toThrow(/runner\.js/);
   expect(calls().some(c => c.includes('merge --no-ff'))).toBe(false);
 });
 
 test('合併衝突要 abort：留著衝突會讓主 clone 卡在 MERGING，之後每個 git 動作都失敗', async () => {
   mergeFails = true;
-  await expect(applyFix(1, 2, [])).rejects.toThrow(/合併失敗/);
+  await expect(applyFix(1, 2)).rejects.toThrow(/合併失敗/);
   expect(calls()).toContain('git merge --abort');
   expect(calls().some(c => c.startsWith('git push'))).toBe(false);
 });
 
-test('有任務在飛就不重啟，但碼照樣合併推送——狀態記 merged，下次按只補重啟那一步', async () => {
-  const r = await applyFix(1, 2, [{ taskId: 77, userId: 2, startedAt: Date.now() }]);
-  expect(r).toMatchObject({ merged: true, restarted: false });
-  expect(r.inflight).toHaveLength(1);
+// 原本這條測的是「有任務在飛就只合併不重啟」。重啟拆走之後**每一次**都是這個結局，所以條件
+// 消失、期待留下：碼照樣合併推送、狀態記 merged，那一列就是更版頁的待更版清單。
+test('合併完就停：碼推上去、狀態記 merged，不重啟也不宣告處置完成', async () => {
+  const r = await applyFix(1, 2);
+  expect(r).toMatchObject({ merged: true, restarted: false, awaitingRelease: true });
   expect(calls().some(c => c.startsWith('docker restart'))).toBe(false);
   expect(mockQuery.mock.calls.some(([sql, p]) => /UPDATE finding_fixes/.test(sql) && p[1] === 'merged')).toBe(true);
   // 提案此時**不能**標 done：畫面靠它決定還要不要給按鈕，提早標會把「還差重啟」那顆一起藏掉
   expect(mockQuery.mock.calls.some(([sql]) => /UPDATE health_check_findings/.test(sql))).toBe(false);
 });
 
-test('沒有任務在飛：合併→推 origin→重啟自己所在的容器', async () => {
+test('合併→推 origin，但一顆 timer 都不排：重啟不在這條路上（等維護時段）', async () => {
   jest.useFakeTimers();
   try {
-    const r = await applyFix(1, 2, []);
-    expect(r).toMatchObject({ merged: true, restarted: true, container: 'odoo-v2' });
-    // 重啟刻意延遲：這道指令會把自己這個行程一起帶走，HTTP 回應得先送出去
-    expect(calls().some(c => c.startsWith('docker restart'))).toBe(false);
-    jest.runAllTimers();
-    expect(calls()).toContain('docker restart odoo-v2');
+    const r = await applyFix(1, 2);
+    expect(r).toMatchObject({ merged: true, restarted: false });
     expect(calls()).toContain('git push origin master');
+    // 連把時鐘轉到底都不該冒出 restart——延遲重啟整段已經搬到 pipeline/release.js
+    jest.runAllTimers();
+    expect(calls().some(c => c.startsWith('docker restart'))).toBe(false);
   } finally { jest.useRealTimers(); }
 });
 
-test('status=merged 不重複合併，只補重啟：上一次已經推上去了，再合一次會產生空 merge commit', async () => {
+test('status=merged 不重複合併：上一次已經推上去了，再合一次會產生空 merge commit', async () => {
   jest.useFakeTimers();
   try {
     mockQuery.mockResolvedValue({ rows: [{ id: 1, status: 'merged', branch: 'fix/finding-9-1', finding_id: 9 }] });
-    await applyFix(1, 2, []);
+    const r = await applyFix(1, 2);
     expect(calls().some(c => c.includes('merge --no-ff'))).toBe(false);
     expect(calls().some(c => c.startsWith('git push'))).toBe(false);
+    // 已經 merged 的再按一次也只是回報「還在等更版」，不會自己去重啟
+    expect(r).toMatchObject({ merged: true, restarted: false, awaitingRelease: true });
     jest.runAllTimers();
-    expect(calls()).toContain('docker restart odoo-v2');
+    expect(calls().some(c => c.startsWith('docker restart'))).toBe(false);
   } finally { jest.useRealTimers(); }
 });
 
 test('合併前必須先跟遠端對齊：遠端被別股工作推進過的話，直接合併只會換來 push 被拒', async () => {
   jest.useFakeTimers();
   try {
-    await applyFix(1, 2, []);
+    await applyFix(1, 2);
     const seq = calls();
     const fetched = seq.findIndex(c => c.startsWith('git fetch origin master'));
     const ff = seq.findIndex(c => c.startsWith('git merge --ff-only origin/master'));
@@ -172,22 +175,19 @@ test('合併前必須先跟遠端對齊：遠端被別股工作推進過的話�
   } finally { jest.useRealTimers(); }
 });
 
-test('整套做完（含重啟）才把提案標 done：留在 pending 的話，下一輪健檢會把同一件事再提一次', async () => {
-  jest.useFakeTimers();
-  try {
-    await applyFix(1, 2, []);
-    const marked = mockQuery.mock.calls.find(([sql]) => /UPDATE health_check_findings/.test(sql));
-    expect(marked).toBeDefined();
-    expect(marked[0]).toMatch(/status='done'/);
-    // applied_at 是回頭驗成效的起算點，重按不該把它往後推
-    expect(marked[0]).toMatch(/COALESCE\(applied_at/);
-    expect(marked[1]).toEqual([9, 2]);
-  } finally { jest.useRealTimers(); }
+// 原本這條測的是「整套做完（含重啟）才把提案標 done」。重啟拆走之後 applyFix 已經不是「整套」，
+// 標 done 跟著搬到 release.js 的重啟路徑（那邊的 done／applied_at／COALESCE 由 release-restart.test.js
+// 接手釘住）。這裡改釘反面：applyFix 一個字都不准碰 health_check_findings，而且要回報「還沒完」
+// ——碼進 master 不等於新碼在跑，提早標 done 會讓更版頁再也看不到這一筆，人就再也按不到那顆按鈕。
+test('合併不等於處置完成：applyFix 不碰 health_check_findings，只回報還在等更版', async () => {
+  const r = await applyFix(1, 2);
+  expect(mockQuery.mock.calls.some(([sql]) => /UPDATE health_check_findings/.test(sql))).toBe(false);
+  expect(r.awaitingRelease).toBe(true);
 });
 
 test('真的分岔（兩邊各有各的 commit）就停手：本地那些是誰放的、要不要留只有人知道', async () => {
   gitCounts = '3\t2';   // origin 多 3、本地多 2
-  await expect(applyFix(1, 2, [])).rejects.toThrow(/分岔/);
+  await expect(applyFix(1, 2)).rejects.toThrow(/分岔/);
   expect(calls().some(c => c.includes('merge --no-ff'))).toBe(false);
   expect(calls().some(c => c.startsWith('git push'))).toBe(false);
 });
@@ -196,7 +196,7 @@ test('真的分岔（兩邊各有各的 commit）就停手：本地那些是誰�
 // 就對齊了，不需要人裁決。舊版把兩者混為一談，於是忘記 push 一次＝當晚全部白跑。
 test('只是忘記 push（本地領先、遠端沒新東西）→ 先推上去再合併', async () => {
   gitCounts = '0\t2';
-  const r = await applyFix(1, 2, [{ taskId: 1, userId: 2, startedAt: Date.now() }]);
+  const r = await applyFix(1, 2);
   expect(r).toMatchObject({ merged: true });
   const seq = calls();
   const pushed = seq.findIndex(c => c === 'git push origin master');
@@ -207,13 +207,13 @@ test('只是忘記 push（本地領先、遠端沒新東西）→ 先推上去�
 
 test('追不上 origin 仍要停手，不能默默往下合併', async () => {
   ffFails = true;
-  await expect(applyFix(1, 2, [])).rejects.toThrow(/追上/);
+  await expect(applyFix(1, 2)).rejects.toThrow(/追上/);
   expect(calls().some(c => c.includes('merge --no-ff'))).toBe(false);
 });
 
 test('push 失敗要把合併節點收回去：留著會讓主分支多一顆只有本機看得到的 commit，重按也解不開', async () => {
   pushFails = true;
-  await expect(applyFix(1, 2, [])).rejects.toThrow(/推送失敗/);
+  await expect(applyFix(1, 2)).rejects.toThrow(/推送失敗/);
   // 回到合併前那一顆；沒有這步，下次按 merge 會回 Already up to date、push 依然被拒
   expect(calls()).toContain('git reset --hard abc1234');
   expect(mockQuery.mock.calls.some(([sql, p]) => /UPDATE finding_fixes/.test(sql) && p[1] === 'merged')).toBe(false);
@@ -222,7 +222,7 @@ test('push 失敗要把合併節點收回去：留著會讓主分支多一顆只
 
 test('ready（還沒採用）不能套用：diff 都還沒進 commit，合併過去是空的', async () => {
   mockQuery.mockResolvedValue({ rows: [{ id: 1, status: 'ready', branch: 'fix/finding-9-1' }] });
-  await expect(applyFix(1, 2, [])).rejects.toThrow(/不能套用/);
+  await expect(applyFix(1, 2)).rejects.toThrow(/不能套用/);
 });
 
 describe('pickSelfContainer', () => {

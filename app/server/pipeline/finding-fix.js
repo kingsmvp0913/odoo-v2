@@ -35,7 +35,6 @@ const WORKTREE_ROOT = process.env.FIX_WORKTREE_DIR || path.join(REPO_ROOT, '.cla
 const FIX_TIMEOUT_MS = parseInt(process.env.PLATFORM_FIX_TIMEOUT_MS || '2400000', 10);
 // 平台自己的主分支（不是客戶專案的 testing）
 const MAIN_BRANCH = process.env.PLATFORM_MAIN_BRANCH || 'master';
-const RESTART_DELAY_MS = parseInt(process.env.PLATFORM_RESTART_DELAY_MS || '1500', 10);
 // 平台自己複驗一次測試的上限。全套實測 3~4 分鐘，留餘裕但不能沒有上限——卡住會讓修正永遠停在 running。
 const FIX_TEST_TIMEOUT_MS = parseInt(process.env.PLATFORM_FIX_TEST_TIMEOUT_MS || '900000', 10);
 
@@ -535,21 +534,20 @@ async function resyncGhostStaged(repoRoot, files) {
 }
 
 /**
- * 一鍵套用：合併進主分支 → 推 origin → 重啟平台。
+ * 一鍵套用：合併進主分支 → 推 origin。**到這裡為止，不重啟。**
  *
- * 重啟走 `docker restart`（交給 host 的 daemon）而不是自殺讓 policy 撿回來：容器內 kill node 會
- * 連 entrypoint 帶 postgres 一起收掉，能不能回來得看容器外的 restart policy——那是這裡看不見的設定。
- *
- * 先查得到容器名才動手合併：名字查不到就重啟不了，此時合併完等於把碼推上去卻停在「跑著舊碼」，
- * 而人剛按的按鈕上寫著「會重啟」。
+ * 更版機制（規格 §4.3 ＋ 09-15 R6）：合併維持自動，重啟改成等平台管理員選的維護時段。合併只動
+ * git，客戶無感；重啟會當場砍掉在飛的 agent、讓測試區 Odoo 的 cron 執行緒永久死掉，有付費客戶
+ * 之後那是事故不是維護。重啟那半段（容器名查詢、在飛任務檢查、標記提案、docker restart）整段
+ * 搬到 `pipeline/release.js`——連同「先查得到容器名才動手」那道前置檢查：不重啟的合併不需要它，
+ * 留著只會讓查不到容器時連碼都併不進去。
  */
-async function applyFix(fixId, userId, inflight = []) {
+async function applyFix(fixId, userId) {
   const { rows: [fix] } = await query('SELECT * FROM finding_fixes WHERE id=$1', [fixId]);
   if (!fix) throw new Error('修正紀錄不存在');
   if (!['adopted', 'pushed', 'merged'].includes(fix.status)) {
     throw new Error(`此狀態不能套用：${fix.status}`);
   }
-  const container = await selfContainerName();
 
   // status='merged'＝上一次按下時碼已經進 master、只差重啟（被在飛任務擋掉）。這裡不重複合併。
   if (fix.status !== 'merged') {
@@ -633,25 +631,10 @@ async function applyFix(fixId, userId, inflight = []) {
     }
     await setStatus(fixId, 'merged');
   }
-
-  // 重啟會當場砍掉在飛的 agent，任務留在 *_running 的孤兒狀態。碼已經在 master 上，晚點再按即可。
-  if (inflight.length) {
-    return { branch: fix.branch, merged: true, restarted: false, inflight };
-  }
-  // 提案標 done 只在真的要重啟這條路上做——「合併了但還在等在飛任務」不算處置完成：畫面靠這個
-  // 狀態決定還要不要給按鈕，提早標會把「還差重啟」那顆按鈕一起藏掉，人就再也按不到了。
-  // 下一輪健檢的 previousProposals() 讀的也是這裡，applied_at 則是回頭驗成效的起算點。
-  await query(
-    `UPDATE health_check_findings
-        SET status='done', decided_by=$2, decided_at=NOW(), applied_at=COALESCE(applied_at, NOW())
-      WHERE id=$1 AND status<>'done'`, [fix.finding_id, userId]);
-  // 延遲讓 HTTP 回應先送出去——這道指令會把自己這個行程一起帶走
-  setTimeout(() => {
-    execFile('docker', ['restart', container], err => {
-      if (err) console.error('[FIX] restart:', err.message);
-    });
-  }, RESTART_DELAY_MS);
-  return { branch: fix.branch, merged: true, restarted: true, container };
+  // 更版機制（規格 §4.3 ＋ 09-15 R6）：合併維持自動，重啟改成等維護時段。
+  // 這裡刻意不再碰 health_check_findings 的 status——「碼進了 master」與「新碼真的在跑」
+  // 是兩件事，提早標 done 會讓更版頁再也看不到這一筆。標記改由 release.js 在真的重啟後做。
+  return { branch: fix.branch, merged: true, restarted: false, awaitingRelease: true };
 }
 
 module.exports = {
