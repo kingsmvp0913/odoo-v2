@@ -407,6 +407,11 @@ describe('/env/sso 借對外名額', () => {
     const { rows: [p] } = await dbModule.query(
       "INSERT INTO projects (name, odoo_version) VALUES ('never-built-sso','17.0') RETURNING id"
     );
+    // 這支是從 master 帶進來的（d0785dc3），寫的時候還沒有租戶隔離，所以只建專案沒綁公司。
+    // 呼叫者 token 是 envuser（一般使用者，屬 EnvCo）——沒綁定就是「他看不到這個專案」，
+    // 範圍檢查回 404 是對的行為。這裡補上 mkEnv 本來就會做的那一行，讓這支測回去測它
+    // 原本要測的東西（沒有 odoo_envs 列時回 202 不回 409），而不是變成在測範圍檢查。
+    await dbModule.query('INSERT INTO project_companies (project_id, company_id) VALUES ($1,$2)', [p.id, companyId]);
     mockRunEnvSetup.mockResolvedValueOnce(undefined);
     const res = await request(app).get(`/api/projects/${p.id}/env/sso`).set('Authorization', `Bearer ${token}`);
     expect(res.status).toBe(202);
