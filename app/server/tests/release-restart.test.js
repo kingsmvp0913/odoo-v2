@@ -6,13 +6,24 @@
 //   (3) 重啟過的列要收掉，否則每個維護時段都看到同一批，沒有新碼也照樣重啟客戶一次；
 //   (4) 有在飛任務、或查不到容器名時什麼都不做——尤其不能標 done：畫面會顯示「處置完成」
 //       而平台其實還跑著舊碼。
+// 第五件是重啟前的全跑閘門：每條修正都只在自己的 worktree 上綠過，「全部合起來」從來沒有人跑過。
+// 這裡的斷言一律要分清楚「跑了測試」與「測試通過」——只檢查有沒有跑，紅燈照樣會被放上線。
 const { newDb } = require('pg-mem');
 
 const mockExecFile = jest.fn((cmd, args, cb) => cb && cb(null, { stdout: '', stderr: '' }));
 jest.mock('child_process', () => ({ execFile: (...args) => mockExecFile(...args) }));
 // selfContainerName 會真的去問 docker；這裡只要控制「查得到／查不到」兩種結果
 const mockSelfContainer = jest.fn();
-jest.mock('../pipeline/finding-fix', () => ({ selfContainerName: (...a) => mockSelfContainer(...a) }));
+// measureTests 會真的 spawn 一次 `npm run test:quiet`（十幾分鐘，而且是在測試裡面再跑一次測試）。
+// ⚠ 這個 mock 少了任何一支測試都會變成遞迴全跑——不是紅燈，是跑不完。
+const mockMeasure = jest.fn();
+jest.mock('../pipeline/finding-fix', () => ({
+  selfContainerName: (...a) => mockSelfContainer(...a),
+  measureTests: (...a) => mockMeasure(...a),
+}));
+
+// measureTests 全綠時的回傳形狀：ok=true（jest exit code 0）＋兩行總結都沒有 failed。
+const GREEN = { ok: true, summary: 'Tests: 3 skipped, 5966 passed, 5969 total', failed: 0, passed: 5966, suiteFailed: 0 };
 
 let dbModule, release, runId;
 
@@ -33,6 +44,8 @@ beforeEach(async () => {
   mockExecFile.mockClear();
   mockSelfContainer.mockReset();
   mockSelfContainer.mockResolvedValue('odoo-v2');
+  mockMeasure.mockReset();
+  mockMeasure.mockResolvedValue(GREEN);
   await dbModule.query('DELETE FROM finding_fixes');
   await dbModule.query('DELETE FROM health_check_findings');
 });
@@ -152,12 +165,94 @@ describe('restartNow', () => {
     } finally { jest.useRealTimers(); }
   });
 
-  test('測試閘門還沒接上時 testsPassed 是 null，不是 true：呼叫端不得把「沒跑」當成「通過」', async () => {
+});
+
+// 這一組釘的是「全部合起來」那道閘門。每條修正都是各自在自己的 worktree 上跑綠才合併的，
+// 這個組合在維護時段之前不存在於任何地方——不在這裡跑，它就直接上線且沒有人在看。
+describe('restartNow 的重啟前全跑閘門', () => {
+  test('全跑紅燈時不重啟，理由要帶得出紅了幾支——光回一個 false，半夜兩點的人不知道下一步查哪裡', async () => {
+    useFakeTimers();
+    try {
+      mockMeasure.mockResolvedValue({
+        ok: false, summary: 'Tests: 3 failed, 5963 passed, 5966 total', failed: 3, passed: 5963, suiteFailed: 1 });
+      const { findingId, fixId } = await seedFix('merged');
+      const r = await release.restartNow({ userId: 7 });
+      expect(`restarted: ${r.restarted}`).toBe('restarted: false');
+      // 「跑了」不等於「過了」：這裡釘的是後者
+      expect(`testsPassed: ${r.testsPassed}`).toBe('testsPassed: false');
+      expect(r.reason).toMatch(/3 支測試紅/);
+      expect(r.reason).toMatch(/Tests: 3 failed, 5963 passed, 5966 total/);
+      jest.runAllTimers();
+      expect(mockExecFile).not.toHaveBeenCalled();
+      // 紅燈的正解是原封不動留到下個時段：標了 done 就等於畫面顯示「處置完成」而平台跑著舊碼
+      expect((await findingRow(findingId)).status).toBe('approved');
+      expect((await fixRow(fixId)).status).toBe('merged');
+    } finally { jest.useRealTimers(); }
+  });
+
+  test('全跑綠燈才重啟，而且 testsPassed 是 true 不是 null：這一次真的有測試證據', async () => {
     useFakeTimers();
     try {
       await seedFix('merged');
       const r = await release.restartNow({ userId: 7 });
-      expect(r.testsPassed).toBeNull();
+      expect(`restarted: ${r.restarted}`).toBe('restarted: true');
+      expect(`testsPassed: ${r.testsPassed}`).toBe('testsPassed: true');
+      expect(r.tests.summary).toBe(GREEN.summary);
+      jest.runAllTimers();
+      expect(mockExecFile).toHaveBeenCalledTimes(1);
+    } finally { jest.useRealTimers(); }
+  });
+
+  test('測試檔整支載不起來是騙人的 pass：Tests: 那行沒有 failed，照樣不准重啟', async () => {
+    useFakeTimers();
+    try {
+      // 改壞的 require／語法錯時，沒跑到的測試不會被算進 Tests: 的 failed——
+      // 那一行只是少掉一批 passed、完全沒有 "failed" 字樣，紅只留在 Test Suites: 上。
+      mockMeasure.mockResolvedValue({
+        ok: false, summary: 'Tests: 3 skipped, 5900 passed, 5903 total', failed: 0, passed: 5900, suiteFailed: 2 });
+      await seedFix('merged');
+      const r = await release.restartNow({ userId: 7 });
+      expect(`restarted: ${r.restarted} / testsPassed: ${r.testsPassed}`)
+        .toBe('restarted: false / testsPassed: false');
+      expect(r.reason).toMatch(/2 個測試檔整支載不起來/);
+      jest.runAllTimers();
+      expect(mockExecFile).not.toHaveBeenCalled();
+    } finally { jest.useRealTimers(); }
+  });
+
+  test('全跑根本沒跑完（逾時／npm 起不來）也不重啟，而且要說得出是哪個錯——不是紅燈但同樣沒有綠燈證據', async () => {
+    useFakeTimers();
+    try {
+      mockMeasure.mockResolvedValue({
+        ok: false, summary: '', failed: null, passed: null, suiteFailed: null, error: 'spawn npm ENOENT' });
+      await seedFix('merged');
+      const r = await release.restartNow({ userId: 7 });
+      expect(`restarted: ${r.restarted} / testsPassed: ${r.testsPassed}`)
+        .toBe('restarted: false / testsPassed: false');
+      expect(r.reason).toMatch(/spawn npm ENOENT/);
+      jest.runAllTimers();
+      expect(mockExecFile).not.toHaveBeenCalled();
+    } finally { jest.useRealTimers(); }
+  });
+
+  test('skipTests 時不跑測試，重啟但 testsPassed 是 null：「沒跑」永遠不能記成「通過」', async () => {
+    useFakeTimers();
+    try {
+      await seedFix('merged');
+      const r = await release.restartNow({ userId: 7, skipTests: true });
+      expect(`restarted: ${r.restarted}`).toBe('restarted: true');
+      expect(r.testsPassed).toBeNull();      // 不是 true——事後回頭查「這次驗過沒有」靠的就是這個值
+      expect(mockMeasure).not.toHaveBeenCalled();
+    } finally { jest.useRealTimers(); }
+  });
+
+  test('跑的是主 clone 的 repo 根：要驗的是「全部合起來」，那份組合只存在於 master 上，不在任何工作區副本', async () => {
+    useFakeTimers();
+    try {
+      await seedFix('merged');
+      await release.restartNow({ userId: 7 });
+      const repoRoot = require('path').join(__dirname, '..', '..', '..');
+      expect(mockMeasure.mock.calls[0][0]).toBe(repoRoot);
     } finally { jest.useRealTimers(); }
   });
 });
