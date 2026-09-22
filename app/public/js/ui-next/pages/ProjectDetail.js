@@ -99,6 +99,8 @@
         try {
           const updated = await Api.put(`projects/${this.$route.params.id}`, { name, description: this.editDescription });
           this.project = { ...this.project, name: updated.name, description: updated.description };
+          // 側欄專案清單印的就是這個 name，外殼只載一次，不通知它就會一路顯示舊名字。
+          window.dispatchEvent(new CustomEvent("ui-next:sidebar-refresh"));
           showToast("已儲存", "success");
         } catch (error) { showToast(error.message || "儲存失敗", "error"); }
         finally { this.savingBasics = false; }
@@ -128,6 +130,8 @@
         this.creatingChat = true;
         const content = this.newChatText.trim(), files = this.newChatFiles.slice();
         try { const chat = await Api.post(`projects/${this.$route.params.id}/chats`, { title: this.newChatTitle.trim() || "新對話" });
+          // 理由同 ProjectChat.createChat：側欄的最近對話要看到這場新對話。
+          window.dispatchEvent(new CustomEvent("ui-next:sidebar-refresh"));
           // ⚠ 訊息端點會 await 整輪 AI 回覆（動輒數分鐘），等它回來才換頁＝畫面像當掉。
           // 比照首頁：送出即不等待，對話頁靠 ?pending=1 立刻進入「回覆中」並開始輪詢。
           if (content || files.length) {

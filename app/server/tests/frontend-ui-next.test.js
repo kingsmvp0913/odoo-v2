@@ -492,7 +492,11 @@ describe("ui-next 平行介面", () => {
     // 目前專案不在近期／最愛清單時的唯一例外補入。
     expect(uiNext).toMatch(/const current = projectById\.get\(this\.currentProjectId\);\s*\n\s*if \(current\) selected\.set/);
     // 換路由（不只 mounted）都要重新對齊側欄，否則 SPA 內切換 Chat 樹不會跟著展開。
-    expect(uiNext).toContain('"$route.path"() { this.syncSidebarToRoute(); }');
+    // 2026-09-22 這個 watcher 多掛了 refreshSidebarOnRouteChange（側欄兩份清單的換頁補刷）。
+    // 原本這裡是逐字釘死整行，改動後當然會紅——但**不放寬**：把新的整行照樣逐字釘死，
+    // 強度一點都不掉。這行是「換一次路由會做哪些事」的完整清單，未來有人再往裡面加東西
+    // 就該在這裡紅一次、被迫回答「這件事真的每次換頁都要做嗎」，那正是原作者要的檢查點。
+    expect(uiNext).toContain('"$route.path"() { this.syncSidebarToRoute(); this.refreshSidebarOnRouteChange(); }');
     expect(uiNext).toContain("this.syncSidebarToRoute();");
     expect(uiNext).toMatch(/syncSidebarToRoute\(\)\s*\{[\s\S]{0,320}this\.expandedProjects\[id\] = true;[\s\S]{0,120}await this\.loadProjectChats\(id\)/);
     // 路由切到剛建立的 Chat 時強制重抓，不讓 lazy-load cache 把最新一筆藏掉。

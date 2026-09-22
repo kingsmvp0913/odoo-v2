@@ -293,6 +293,9 @@
           request.catch((e) => showToast(e.message || "訊息送出失敗", "error", 0));
           // 側欄先展開，動畫這 300ms 正好把清單載完——不然它會和右側的內容同時跳出來。
           window.dispatchEvent(new CustomEvent("ui-next:project-preload", { detail: { projectId: this.projectId } }));
+          // 新對話已經建起來（上面的 await 回來了）才發：失敗也發的話，側欄會重載成「什麼都沒變」，
+          // 看起來就像按鈕沒反應。
+          window.dispatchEvent(new CustomEvent("ui-next:sidebar-refresh"));
           // 把剛送出的那句留給對話頁先畫上：訊息端點還在跑，DB 這一刻可能還沒有這則，
           // 對話頁只信伺服器的話，換過去會是一片空白——自己剛打的字不見了。
           try { sessionStorage.setItem(`ui-next:pending-msg:${chat.id}`, content); } catch (_) { /* 隱私模式沒有 sessionStorage，退回原本的空白等待 */ }
@@ -583,6 +586,10 @@
         window.UserStore.features = me.features || {};
         this.projects = projects || [];
         this.sidebarChatProjects = sidebarChatProjects || [];
+        // 這兩份清單剛載完：記下當下的路由範疇與時間，換頁補刷（watch $route.path）才有比較基準；
+        // 少了時間戳，進站後的第一次換頁會馬上再打一次同樣的兩支 API。
+        this._sidebarScope = this.sidebarScopeKey();
+        this._sidebarListsAt = Date.now();
         // 直接開 Chat 深連結時 watch 不會觸發（路由沒變過），所以載完專案要自己補一次。
         this.syncSidebarToRoute();
         this.loadSidebarTasks();
@@ -637,6 +644,16 @@
           this.ensureProjectChats(id);
         };
         window.addEventListener("ui-next:project-preload", this._onProjectPreload);
+        // 外殼是根元件、只 mounted 一次，換頁不會重掛 ⇒ 專案清單與最近對話載入後就再也不會變，
+        // 新增／刪除專案、開新對話之後側欄還停在舊世界，非得 F5。改由各頁面在「伺服器已確認」
+        // 之後丟這個事件，外殼自己重載——頁面不必伸手進外殼的內部狀態。事件命名沿用既有的
+        // ui-next:project-preload。
+        this._onSidebarRefresh = () => {
+          this.reloadSidebarLists();
+          // 對話列（projectChats）不在那兩份清單裡，在別頁新增／刪除對話後要靠這支補目前專案那棵樹。
+          this.syncSidebarToRoute();
+        };
+        window.addEventListener("ui-next:sidebar-refresh", this._onSidebarRefresh);
       } catch (e) {
         /* router 的登入守衛處理失效憑證 */
       }
@@ -645,6 +662,7 @@
       window.removeEventListener("keydown", this._onCommandKey);
       document.removeEventListener("pointerdown", this._onOutsidePointer);
       window.removeEventListener("ui-next:project-preload", this._onProjectPreload);
+      window.removeEventListener("ui-next:sidebar-refresh", this._onSidebarRefresh);
       if (this._sockTimer) { clearInterval(this._sockTimer); this._sockTimer = null; }
       if (this._maintTimer) { clearInterval(this._maintTimer); this._maintTimer = null; }
       if (this._onSidebarTaskUpdated && window._socket) window._socket.off("task:updated", this._onSidebarTaskUpdated);
@@ -667,7 +685,7 @@
         this.commandTimer = setTimeout(() => this.runCommandSearch(), 220);
       },
       mobileSidebarOpen() { this.syncBodyScroll(); },
-      "$route.path"() { this.syncSidebarToRoute(); },
+      "$route.path"() { this.syncSidebarToRoute(); this.refreshSidebarOnRouteChange(); },
     },
     methods: {
       formatUsageUpdated(value) {
@@ -740,6 +758,40 @@
         if (!id) return;
         this.expandedProjects[id] = true;
         await this.loadProjectChats(id);
+      },
+      // 側欄那兩份清單的「範疇」＝頁面區段（路徑第一段）＋專案 id。只有這個鍵變了才值得重載：
+      // 同一專案內切頁籤只動 query（watch 的是 $route.path，根本不會觸發），同一專案內換對話
+      // 只動路徑尾巴，兩者都不會改變專案清單或最近對話。專案 id 只在 /projects 區段採計——
+      // $route.params.id 在任務頁是任務 id（見 currentTaskId 的註解），不排除的話逐張看任務
+      // 也會一直重載。
+      sidebarScopeKey() {
+        const section = (this.$route.path.split("/")[1] || "");
+        return section + "|" + (section === "projects" ? this.currentProjectId : "");
+      },
+      refreshSidebarOnRouteChange() {
+        const key = this.sidebarScopeKey();
+        if (key === this._sidebarScope) return;
+        this._sidebarScope = key;
+        // 節流：換頁補刷只是保險（漏掉的操作、另一個分頁動的資料），不值得每次換頁都打兩支 API。
+        // _sidebarListsAt 還沒有值＝mounted 那次載入還沒回來，這時重載純屬重複。
+        if (!this._sidebarListsAt || Date.now() - this._sidebarListsAt < 15000) return;
+        this.reloadSidebarLists();
+      },
+      // 只重載真正會過期的那兩份：任務那五筆有 socket 的 task:updated 推、未讀數由 socket.js 直接寫。
+      async reloadSidebarLists() {
+        this._sidebarListsAt = Date.now();
+        try {
+          const [projects, sidebarChatProjects] = await Promise.all([
+            Api.get("projects"),
+            Api.get("chats/sidebar-projects"),
+          ]);
+          this.projects = projects || [];
+          this.sidebarChatProjects = sidebarChatProjects || [];
+          this.sidebarProjectsError = "";
+        } catch (error) {
+          // 失敗時保留畫面上既有的清單：清空會讓側欄整排消失，比顯示過期資料更糟。
+          this.sidebarProjectsError = error.message || "無法載入近期對話專案";
+        }
       },
       // 「提意見」不掛 isAdmin：所有登入使用者都看得到（刻意），提交端點也不限管理員。
       openFeedback(event) {
@@ -1155,6 +1207,10 @@
         if (!await confirmDialog({ title: "刪除對話", message: `確定刪除「${chat.title || "新對話"}」？`, danger: true, confirmText: "刪除" })) return;
         try {
           await Api.delete(`projects/${project.id}/chats/${chat.id}`);
+          // 刪掉的可能是這個專案最後一場對話，那它就該從「最近對話」整個消失——
+          // 那份清單不在本元件的 cache 裡，得走同一個事件重載（改名不用：標題只存在 projectChats，
+          // 上面 submitRenameChat 已就地改掉那一筆，重抓整份反而會閃一下）。
+          window.dispatchEvent(new CustomEvent("ui-next:sidebar-refresh"));
           this.projectChats[project.id] = (this.projectChats[project.id] || []).filter((item) => String(item.id) !== String(chat.id));
           // 刪掉的正是目前開著的那個 Chat，留在原地會是一頁 404。
           if (this.isCurrentChat(project, chat)) this.go(`/projects/${project.id}/chat`);

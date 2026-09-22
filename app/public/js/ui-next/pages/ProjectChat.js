@@ -190,6 +190,9 @@
         this.creatingChat = true; this.chatError = "";
         const content = this.newChatText.trim(), files = this.newChatFiles.slice();
         try { const chat = await Api.post(`projects/${this.$route.params.id}/chats`, { title: this.newTitle.trim() || "新對話" });
+          // 側欄的「最近對話」是外殼 mounted 時載一次就不動的，新對話不通知它就要等使用者自己 F5。
+          // 放在 await 之後（不是 finally）：建立失敗還去重載，側欄會刷成「什麼都沒變」，像按鈕沒反應。
+          window.dispatchEvent(new CustomEvent("ui-next:sidebar-refresh"));
           // 有第一句話或圖就順手送出。⚠ 比照首頁：訊息端點會 await 整輪 AI 回覆（動輒數分鐘），
           // 等它回來才換頁＝使用者盯著這個小視窗好幾分鐘。送出即不等待，換過去的對話頁靠
           // ?pending=1 立刻進「回覆中」並開始輪詢。
@@ -216,7 +219,8 @@
       revokeNewChatUrls() { this.newChatPreviews.forEach((url) => { if (url) URL.revokeObjectURL(url); }); },
       async deleteChat(chat) {
         if (!await confirmDialog({ title: "刪除對話", message: `確定刪除「${chat.title || "新對話"}」？`, danger: true, confirmText: "刪除" })) return;
-        try { await Api.delete(`projects/${this.$route.params.id}/chats/${chat.id}`); if (this.activeChat && this.activeChat.id === chat.id) await this.$router.push(`/projects/${this.$route.params.id}/chat`); else this.chats = this.chats.filter((item) => item.id !== chat.id); }
+        // 刪掉專案最後一場對話時，側欄的「最近對話」整個專案都該消失——伺服器回來了才通知。
+        try { await Api.delete(`projects/${this.$route.params.id}/chats/${chat.id}`); window.dispatchEvent(new CustomEvent("ui-next:sidebar-refresh")); if (this.activeChat && this.activeChat.id === chat.id) await this.$router.push(`/projects/${this.$route.params.id}/chat`); else this.chats = this.chats.filter((item) => item.id !== chat.id); }
         catch (error) { showToast(error.message || "無法刪除對話", "error"); }
       },
       onFilesSelected(event) { this.addPendingFiles(Array.from(event.target.files || [])); event.target.value = ""; },
