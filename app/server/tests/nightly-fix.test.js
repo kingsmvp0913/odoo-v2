@@ -1,7 +1,7 @@
 // nightly-fix.js 是意見回饋通道的核心編排器：把「approved 的候選」變成「合併進 master 的碼」。
 // 這支釘住每一道守門：候選篩選、統整後才套上限、測試沒過不採用、審查 reject 重跑一次、
 // cli_push_user_id 為空停在 adopted、兩道保險絲開跑前檢查、標 done（否則每晚重做同一批）、
-// 序號不撞號、逐條失敗不炸整批、drain-timeout／拋錯都清旗標、清旗標排在重啟之前。
+// 序號不撞號、逐條失敗不炸整批、drain-timeout／拋錯都清旗標、**合併完不重啟**（規格 §4.3）。
 //
 // ⚠ 時間一律走注入時鐘（`_setClockForTesting`）。這支的保險絲是「跑到台北 02:00 為止」，
 // 用真實 Date.now() 寫測試的話，00:00–01:59 那兩小時綠、其餘時段紅——本 repo 的 cron.test.js
@@ -18,7 +18,6 @@ jest.mock('../pipeline/finding-fix', () => ({
   adoptFix: jest.fn(),
   applyFix: jest.fn(),
   removeWorktree: jest.fn(),
-  selfContainerName: jest.fn(async () => 'odoo-v2'),
 }));
 // execFile 的 promisify 版依呼叫方式走 (cmd, args, cb) 或 (cmd, args, opts, cb)：callback 一律是最後一個參數
 const mockExecFile = jest.fn((...args) => { const cb = args[args.length - 1]; cb(null, { stdout: '', stderr: '' }); });
@@ -29,7 +28,7 @@ const { getInflightInfo } = require('../pipeline/runner');
 const { mergeCandidates } = require('../pipeline/feedback-merge');
 const { reviewFix } = require('../pipeline/fix-review');
 const { verifyFix } = require('../pipeline/fix-verify');
-const { runFix, adoptFix, applyFix, removeWorktree, selfContainerName } = require('../pipeline/finding-fix');
+const { runFix, adoptFix, applyFix, removeWorktree } = require('../pipeline/finding-fix');
 
 let dbModule, nightlyFix, maintenance, userId;
 
@@ -63,7 +62,6 @@ afterAll(() => {
 beforeEach(async () => {
   jest.clearAllMocks();
   getInflightInfo.mockReturnValue([]);
-  selfContainerName.mockResolvedValue('odoo-v2');
   // 複檢預設通過且沒動手：這支測的是編排器的路由，複檢自己的判準在 fix-verify.test.js。
   // 要驗「複檢擋下」的那幾支各自覆寫這個回傳值。
   verifyFix.mockResolvedValue({ pass: true, changed: false, reason: '複檢通過', notes: '複檢說明' });
@@ -523,7 +521,7 @@ test('reviewFix 第二次仍 reject → 不再重試，這條結束', async () =
   expect(result.applied).toBe(0);
 });
 
-test('兩者都過 → 依序呼叫 adoptFix、applyFix，且 applyFix 收到非空 inflight（只合併不重啟）', async () => {
+test('兩者都過 → 依序呼叫 adoptFix、applyFix（applyFix 本身就只合併不重啟，不必再傳 inflight）', async () => {
   await insertHealthProposal({ severity: 'high' });
   stubHappyPath();
 
@@ -531,9 +529,9 @@ test('兩者都過 → 依序呼叫 adoptFix、applyFix，且 applyFix 收到非
 
   expect(adoptFix).toHaveBeenCalled();
   expect(applyFix).toHaveBeenCalled();
-  const inflightArg = applyFix.mock.calls[0][2];
-  expect(Array.isArray(inflightArg)).toBe(true);
-  expect(inflightArg.length).toBeGreaterThan(0);
+  // 舊版靠「傳非空 inflight」換取只合併不重啟；重啟整段搬去 release.js 之後那個引數沒人收了，
+  // 留著會讓人以為「不重啟」還要靠呼叫端配合才成立（規格 §4.3）。
+  expect(applyFix.mock.calls[0]).toHaveLength(2);
   expect(adoptFix.mock.invocationCallOrder[0]).toBeLessThan(applyFix.mock.invocationCallOrder[0]);
   expect(result.applied).toBe(1);
 });
@@ -605,7 +603,7 @@ test('cli_push_user_id 為 null → 停在 adopted、不呼叫 applyFix、來源
 
 // --- 標 done（否則每晚重做同一批）---
 
-test('合併成功 → 意見標 done 並寫回 finding_id；健檢提案標 done 並記 applied_at', async () => {
+test('合併成功 → 意見標 done 並寫回 finding_id；提案標 done 但 applied_at 留白（等更版才記）', async () => {
   const fbId = await insertFeedback();
   stubHappyPath();
 
@@ -617,10 +615,12 @@ test('合併成功 → 意見標 done 並寫回 finding_id；健檢提案標 don
   const { rows: [fin] } = await dbModule.query(
     'SELECT status, applied_at FROM health_check_findings WHERE id=$1', [fb.finding_id]);
   expect(fin.status).toBe('done');
-  expect(fin.applied_at).not.toBeNull();
+  // done＝來源已從候選名單退掉（合併當下就必須成立，否則每晚重做同一批）；
+  // applied_at＝回頭驗成效的起算點，要等維護時段真的重啟過才算數（規格 §4.3）。兩者刻意分開。
+  expect(fin.applied_at).toBeNull();
 });
 
-test('健檢來源沿用既有 finding、不重建；合併後標 done ＋ applied_at', async () => {
+test('健檢來源沿用既有 finding、不重建；合併後標 done，applied_at 仍留白（等更版）', async () => {
   const findingId = await insertHealthProposal({ severity: 'high' });
   stubHappyPath();
 
@@ -631,7 +631,7 @@ test('健檢來源沿用既有 finding、不重建；合併後標 done ＋ appli
   const { rows: [f] } = await dbModule.query(
     'SELECT status, applied_at FROM health_check_findings WHERE id=$1', [findingId]);
   expect(f).toMatchObject({ status: 'done' });
-  expect(f.applied_at).not.toBeNull();
+  expect(f.applied_at).toBeNull();
   // 沒有為了這條多生一列
   const { rows } = await dbModule.query('SELECT COUNT(*)::int AS n FROM health_check_findings');
   expect(rows[0].n).toBe(1);
@@ -779,54 +779,43 @@ test('維護旗標已亮（上一批還在跑）→ 不重複啟動', async () =
   expect(await maintenance.isMaintenance()).toBe(true);  // 沒把別人的旗標清掉
 });
 
-// --- 重啟 ---
+// --- 不重啟（規格 §4.3：合併自動、重啟等維護時段）---
 
-test('一條都沒合併成功 → 不重啟', async () => {
-  await insertHealthProposal({ severity: 'high' });
-  stubHappyPath();
-  runFix.mockImplementation(async (fixId) => {
-    await dbModule.query(`UPDATE finding_fixes SET status='failed' WHERE id=$1`, [fixId]);
-  });
-
-  await nightlyFix.runNightlyFix({ startedBy: userId });
-
-  expect(runFix).toHaveBeenCalled();         // 正向錨：迴圈有跑，只是沒有一條成功
-  expect(restartCalls()).toHaveLength(0);
-});
-
-test('有合併成功 → 重啟一次，且清維護旗標排在重啟指令之前', async () => {
+test('合併成功也不重啟平台：碼留在 master 等維護時段，旗標照樣清乾淨', async () => {
   await insertHealthProposal({ severity: 'high', label: 'a' });
   await insertHealthProposal({ severity: 'high', label: 'b' });
   stubHappyPath();
 
-  // 重啟那道指令會把整個行程帶走，排在它後面的清旗標不保證跑得到。
-  // 在 docker restart 當下去問旗標狀態：已清＝順序正確。
-  let maintenanceAtRestart = null;
-  mockExecFile.mockImplementation((cmd, args, ...rest) => {
-    const cb = rest[rest.length - 1];
-    if (cmd === 'docker' && args[0] === 'restart') maintenanceAtRestart = maintenance.isMaintenance();
-    return cb(null, { stdout: '', stderr: '' });
-  });
-
   const result = await nightlyFix.runNightlyFix({ startedBy: userId });
 
+  // 正向錨：兩條都真的合併了（否則「沒重啟」只是因為什麼都沒做，證明不了任何事）
   expect(result.applied).toBe(2);
-  expect(restartCalls()).toHaveLength(1);              // 兩條都合併，但只重啟一次
-  expect(restartCalls()[0][1]).toEqual(['restart', 'odoo-v2']);
-  expect(await maintenanceAtRestart).toBe(false);      // 重啟當下旗標已清
+  // 半夜 docker restart 自己＝把正在用測試區的客戶踢下線、把在飛的 agent 砍成孤兒。
+  // 重啟整段搬去 pipeline/release.js，由平台管理員選的維護時段觸發。
+  expect(restartCalls()).toHaveLength(0);
   expect(await maintenance.isMaintenance()).toBe(false);
 });
 
-test('查不到容器名 → 不重啟也不拋錯（碼已合併，留 log 讓人工重啟）', async () => {
-  await insertHealthProposal({ severity: 'high' });
-  stubHappyPath();
-  selfContainerName.mockRejectedValue(new Error('無法唯一辨識平台容器'));
+test('已更版（finding_fixes=released）的來源，下一批開跑時補記 applied_at', async () => {
+  // applied_at 是回頭驗成效的起算點，合併當下不記（見上面標 done 那兩支）。
+  // release.js 重啟後會把修正列收成 released，那才是「新碼真的在跑」的憑據——
+  // 但它只認得 finding_fixes.finding_id，且它的 UPDATE 帶 status<>'done'，對這些列是空砲，
+  // 所以補記由批次自己做。
+  // 兩列都已經是 done（合併當下就標掉了），所以這一晚沒有候選——補記與跑不跑候選無關
+  const groupId = await insertHealthProposal({ severity: 'high', label: '合併組', status: 'done' });
+  const memberId = await insertHealthProposal({ severity: 'high', label: '來源提案', status: 'done' });
+  await dbModule.query(
+    `INSERT INTO finding_fixes (finding_id, status, created_by, members) VALUES ($1,'released',$2,$3)`,
+    [groupId, userId, JSON.stringify([{ source: 'finding', id: memberId }])]);
 
-  const result = await nightlyFix.runNightlyFix({ startedBy: userId });
+  await nightlyFix.runNightlyFix({ startedBy: userId });
 
-  expect(result.applied).toBe(1);
-  expect(restartCalls()).toHaveLength(0);
-  expect(await maintenance.isMaintenance()).toBe(false);
+  // 合併組那一列與 members 裡的來源提案都要補到
+  for (const id of [groupId, memberId]) {
+    const { rows: [f] } = await dbModule.query(
+      'SELECT applied_at FROM health_check_findings WHERE id=$1', [id]);
+    expect(f.applied_at).not.toBeNull();
+  }
 });
 
 // --- 失敗退場（否則一條永遠修不好的意見會每晚重跑、並永久佔住 5 格中的一格）---
@@ -965,11 +954,9 @@ test('markGroupDone 持續拋錯 → 不計入 applied、不誤記失敗次數�
   expect(fb.fix_attempts).toBe(0);
   expect(fb.status).toBe('new');
   expect(fb.triage_note).toContain('碼已合併進 master');
-  // 碼此刻已經在 master 上了，不重啟的話平台會一直跑舊碼
-  expect(restartCalls()).toHaveLength(1);
 });
 
-test('markGroupDone 持續拋錯 → 連跑三晚只合併一次，這一條不會每晚重付 triage、重跑兩次全套測試、重新 merge、重啟', async () => {
+test('markGroupDone 持續拋錯 → 連跑三晚只合併一次，這一條不會每晚重付 triage、重跑兩次全套測試、重新 merge', async () => {
   await insertFeedback();
   stubHappyPath();
   applyFix.mockImplementation(async () => {
@@ -979,7 +966,6 @@ test('markGroupDone 持續拋錯 → 連跑三晚只合併一次，這一條不�
 
   const first = await nightlyFix.runNightlyFix({ startedBy: userId });     // 第一晚：合併成功但收尾失敗，立即退場
   expect(first).toMatchObject({ attempted: 1, applied: 0 });
-  expect(restartCalls()).toHaveLength(1);
 
   jest.clearAllMocks();
   stubHappyPath();
@@ -990,7 +976,6 @@ test('markGroupDone 持續拋錯 → 連跑三晚只合併一次，這一條不�
   const second = await nightlyFix.runNightlyFix({ startedBy: userId });    // 第二晚：已退場，不再是候選
   expect(mergeCandidates).not.toHaveBeenCalled();
   expect(second.attempted).toBe(0);
-  expect(restartCalls()).toHaveLength(0);   // 這一晚沒有新碼要合併，不該重啟
 
   jest.clearAllMocks();
   stubHappyPath();
@@ -1001,7 +986,6 @@ test('markGroupDone 持續拋錯 → 連跑三晚只合併一次，這一條不�
   const third = await nightlyFix.runNightlyFix({ startedBy: userId });     // 第三晚：同上
   expect(mergeCandidates).not.toHaveBeenCalled();
   expect(third.attempted).toBe(0);
-  expect(restartCalls()).toHaveLength(0);
 });
 
 test('materializeGroup 本身拋錯 → 仍計入 attempted（否則摘要行低報），來源成員仍要記失敗次數', async () => {

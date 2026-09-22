@@ -411,17 +411,18 @@ test('修正相關路由一律 admin only', async () => {
   expect((await request(app).post('/api/admin/fixes/1/adopt')
     .set('Authorization', `Bearer ${userToken}`).send({})).status).toBe(403);
   expect((await request(app).post('/api/admin/fixes/1/push')).status).toBe(401);
-  // 套用會重啟整個平台，是全站破壞力最大的一顆按鈕
+  // 套用會把無人監督產出的碼合併進 master 並推上 origin，是全站破壞力最大的一顆按鈕
   expect((await request(app).post('/api/admin/fixes/1/apply')
     .set('Authorization', `Bearer ${userToken}`).send({})).status).toBe(403);
   expect((await request(app).post('/api/admin/fixes/1/apply')).status).toBe(401);
 });
 
-test('套用要把在飛任務清單傳進去：重不重啟由 runner 的實際狀態決定，不是由前端說了算', async () => {
+test('套用只合併不重啟：不再把在飛任務清單傳進去（那道判斷跟著重啟搬去 release.js）', async () => {
   const r = await request(app).post('/api/admin/fixes/7/apply')
     .set('Authorization', `Bearer ${adminToken}`).send({});
   expect(r.status).toBe(200);
-  expect(mockApply).toHaveBeenCalledWith(7, expect.any(Number), []);
+  // 多傳一個沒人收的引數，會讓人以為「不重啟」還要靠呼叫端傳值才成立（規格 §4.3）
+  expect(mockApply).toHaveBeenCalledWith(7, expect.any(Number));
 });
 
 // review_notes 是 fix-review 的推理過程——那份修正會被無人監督地合併進 master，事後要問

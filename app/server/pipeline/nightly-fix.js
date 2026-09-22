@@ -1,4 +1,3 @@
-const { execFile } = require('child_process');
 const { query } = require('../db');
 const { MACHINE_RETIRE_PREFIX, NIGHTLY_SKIP_PREFIX } = require('./retire-prefix');
 const { AUTO_LAYERS, HEALTH_SEVERITIES, inAutoFixScope, normalizeLayer } = require('./auto-fix-scope');
@@ -6,14 +5,17 @@ const { enterMaintenance, leaveMaintenance, isMaintenance } = require('./mainten
 const { mergeCandidates } = require('./feedback-merge');
 const { reviewFix } = require('./fix-review');
 const { verifyFix } = require('./fix-verify');
-const { runFix, adoptFix, applyFix, removeWorktree, selfContainerName } = require('./finding-fix');
+const { runFix, adoptFix, applyFix, removeWorktree } = require('./finding-fix');
 
 /**
  * nightly-fix.js — 夜間批次編排器：意見回饋通道的核心。
  *
  * 進維護視窗 → 等在飛任務排空 → 撈候選（意見回饋 approved ＋ 健檢提案 approved）→ triage →
- * 統整 → 逐條走完整條鏈（runFix → fix-review → adopt → applyFix 只合併）→ 標 done →
- * 全部跑完才重啟一次。
+ * 統整 → 逐條走完整條鏈（runFix → fix-review → adopt → applyFix 只合併）→ 標 done。
+ *
+ * ⚠ 批次**不重啟平台**（規格 §4.3）。碼合併完停在 `finding_fixes.status='merged'`，那正是
+ * `pipeline/release.js` 的待更版清單；真正的重啟等平台管理員選的維護時段。半夜把正在用測試區的
+ * 客戶踢下線、把在飛的 agent 砍成孤兒，那是事故不是維護——有付費客戶之後這條路不能再走。
  *
  * ⚠ 這是「平台自己改自己」的最後一段自動化。它最可能的失敗方式不是炸掉，而是**安靜地什麼都
  * 沒做**——保險絲誤擋、候選撈不到、每條都失敗，畫面上全都長得跟「今晚本來就沒事做」一模一樣
@@ -411,8 +413,15 @@ async function createFixRow(findingId, startedBy, cand) {
  * 成功合併之後把來源標掉。**沒有這一步，同一批 approved 每晚會重做一次**：重新 triage、重建
  * finding、重跑兩次全套測試，而使用者端永遠停在「已核准」（`task-1.3-brief.md`：done 由夜間批次寫）。
  *
- * ⚠ 不能指望 applyFix 代勞：它在 inflight 非空時提早 return（夜間批次正是傳非空值來「只合併不
- * 重啟」），跳過了它自己標 done 的那段。
+ * ⚠ 這裡**只寫 `status='done'`，不寫 `applied_at`**（規格 §4.3，與 release.js 同一個判準）：
+ *   - `done` 必須在合併當下就寫。它是「把來源從候選名單退掉」的唯一動作，而維護時段那條路
+ *     （release.js）只認得 `finding_fixes.finding_id`，看不到本檔的 members；留到時段才標的話，
+ *     從合併到週末最多隔六個晚上，每晚都會對已經在 master 上的碼整條重跑一次。
+ *   - `applied_at` 相反。它是回頭驗成效的起算點（health-check-runner 的 previousProposals 讀它），
+ *     而「碼進 master」與「新碼真的在跑」拆開之後差得到好幾天；在合併當下蓋時間，等於把舊碼期間
+ *     的指標算進這條修正的成效裡。改由 stampReleasedSources 在確認更版之後補記。
+ *
+ * ⚠ 不能指望 applyFix 代勞：合併與重啟拆開之後它完全不碰 health_check_findings（見 finding-fix.js）。
  */
 async function markGroupDone(cand, userId) {
   for (const it of cand.members) {
@@ -430,7 +439,7 @@ async function markGroupDone(cand, userId) {
       if (prev && prev.finding_id && prev.finding_id !== cand.findingId) {
         await query(
           `UPDATE health_check_findings
-              SET status='done', decided_by=$2, decided_at=NOW(), applied_at=COALESCE(applied_at, NOW())
+              SET status='done', decided_by=$2, decided_at=NOW()
             WHERE id=$1`, [prev.finding_id, userId || null]);
       }
       await query(
@@ -438,14 +447,12 @@ async function markGroupDone(cand, userId) {
     } else {
       await query(
         `UPDATE health_check_findings
-            SET status='done', decided_by=$2, decided_at=NOW(), applied_at=COALESCE(applied_at, NOW())
+            SET status='done', decided_by=$2, decided_at=NOW()
           WHERE id=$1`, [it.row.id, userId || null]);
     }
   }
-  // 批次自建的那一列（合併組）也要記 applied_at，才分得出「試過沒成」與「已套用」
-  await query(
-    `UPDATE health_check_findings SET applied_at = COALESCE(applied_at, NOW()) WHERE id=$1`,
-    [cand.findingId]);
+  // 批次自建的那一列（合併組）同樣不在這裡記 applied_at：它要分的是「試過沒成」與「已套用」，
+  // 而拆開合併與重啟之後，這一刻只到「已合併」。補記見 stampReleasedSources。
 }
 
 /**
@@ -660,8 +667,8 @@ async function runOneCandidate(cand, { pushUserId, startedBy }) {
       await setStage(cand.members, '合併中');
       await adoptFix(fixId, pushUserId);
       try {
-        // ⚠ inflight 傳非空值 ⇒ 只合併不重啟（最後才單獨重啟一次）
-        await applyFix(fixId, pushUserId, ['nightly-fix']);
+        // applyFix 只合併、不重啟（拆開之後對誰呼叫都一樣，不必再傳 inflight）
+        await applyFix(fixId, pushUserId);
       } catch (err) {
         // ⚠ 這個 catch 不能省成外層的統一 catch：外層會 noteFailedAttempt，而 applyFix 拋的
         // 是「平台此刻的狀態」不是這份 diff 的問題（見 noteDeferred）。修正列留在 adopted，
@@ -716,7 +723,7 @@ async function resumeAdoptedFixes({ pushUserId, startedBy }) {
   let merged = 0;
   for (const fix of rows) {
     try {
-      await applyFix(fix.id, pushUserId, ['nightly-fix']);
+      await applyFix(fix.id, pushUserId);
       merged += 1;
       const members = membersFromRefs(fix.members);
       if (!members.length) {
@@ -735,6 +742,41 @@ async function resumeAdoptedFixes({ pushUserId, startedBy }) {
 }
 
 /**
+ * 已經更版（新碼真的在跑）的那幾組，補記來源的 `applied_at` -> 補了幾列。
+ *
+ * 為什麼要有這一段：合併與重啟拆開之後，`applied_at`（回頭驗成效的起算點）必須等到維護時段
+ * 重啟過才算數，但維護時段那條路（release.js）幫不了夜間批次的來源列——
+ *   1. 它只認得 `finding_fixes.finding_id`，看不到本檔的 members；多成員的合併組裡真正的提案列
+ *      不在那個欄位裡。
+ *   2. 它的 UPDATE 帶 `status<>'done'`，而批次自建的施工紀錄一出生就是 done、來源也在合併當下
+ *      就被 markGroupDone 標成 done（理由見該函式），所以那句 UPDATE 對這幾列一律是空砲。
+ * 於是改由批次自己回頭補：`finding_fixes.status='released'` 就是 release.js 真的重啟過的憑據。
+ *
+ * ⚠ 只補 `applied_at IS NULL` 的，所以重跑無害；跑在每批開頭，最壞延遲一晚。
+ * ⚠ 意見回饋成員沒有對應欄位（feedback 表沒有 applied_at），不在這裡處理。
+ */
+async function stampReleasedSources() {
+  const { rows } = await query(
+    `SELECT id, finding_id, members FROM finding_fixes WHERE status='released' ORDER BY id`);
+  let stamped = 0;
+  for (const fix of rows) {
+    const ids = [fix.finding_id];
+    for (const m of membersFromRefs(fix.members)) {
+      if (m.source === 'finding') ids.push(m.row.id);
+    }
+    for (const id of ids) {
+      if (id == null) continue;
+      const r = await query(
+        `UPDATE health_check_findings SET applied_at=NOW() WHERE id=$1 AND applied_at IS NULL`, [id])
+        .catch(e => { console.error('[NIGHTLY-FIX] 補記 applied_at 失敗（提案 #%s）：%s', id, e.message); return null; });
+      stamped += (r && r.rowCount) || 0;
+    }
+  }
+  if (stamped) console.log('[NIGHTLY-FIX] 已更版的修正補記 applied_at：%d 列', stamped);
+  return stamped;
+}
+
+/**
  * runNightlyFix({ startedBy }) -> { attempted, applied, skipped, reason? }
  */
 async function runNightlyFix({ startedBy = null } = {}) {
@@ -749,7 +791,6 @@ async function runNightlyFix({ startedBy = null } = {}) {
   const batchStartedAt = startedAt.toISOString();
   const deadlineAt = deadlineFor(startedAt);
   let entered = false;
-  let mergedAny = false;
   // runId 放在 try 外面：收尾要在 finally 做，否則保險絲查詢（tokensSince）之類的例外一逃出
   // 迴圈，這一列就永遠停在 running——那正是 C4 要防的症狀。
   let runId = null;
@@ -777,12 +818,14 @@ async function runNightlyFix({ startedBy = null } = {}) {
      *    它們標成 done；晚於取候選的話，同一批意見會一邊被補合併、一邊又被當成新候選整條重跑。
      * 2. 必須在「沒有候選就早退」**之前**。那正是最需要補合併的情況——來源已經被上一批處理完、
      *    只剩一個孤在分支上的 commit，早退會讓它永遠等不到下一次。
-     * ⚠ mergedAny 也要在這裡就設：下面幾個早退都是 `return`，finally 照跑，補進去的碼一樣要靠
-     *    那次重啟才會生效。
      */
-    const resumed = await resumeAdoptedFixes({ pushUserId, startedBy })
+    await resumeAdoptedFixes({ pushUserId, startedBy })
       .catch(e => { console.error('[NIGHTLY-FIX] 補合併上一批失敗：', e.message); return 0; });
-    if (resumed) mergedAny = true;
+
+    // 上一個維護時段重啟過的那幾組，來源的 applied_at 在這裡才補得上（見 stampReleasedSources）。
+    // 放在取候選之前只是順手：它不燒 token、也不影響候選，早一點補完晚一點都不會改變這批要做什麼。
+    await stampReleasedSources()
+      .catch(e => console.error('[NIGHTLY-FIX] 補記 applied_at 失敗：', e.message));
 
     // triage／merge 也要燒 token，所以進迴圈之前先問一次保險絲
     const preFuse = await fuseTripped(deadlineAt, batchStartedAt);
@@ -879,8 +922,8 @@ async function runNightlyFix({ startedBy = null } = {}) {
        * 可跑到 ~90 分鐘（measureTests × 2 ＋ platform-fix ＋ fix-review ＋ 重跑一次）；
        * NIGHTLY_FIX_MAINTENANCE_MS 卻只有 4 小時且只在批次一開始 enterMaintenance 過一次、
        * 不會自動續期。自動排程路徑（22:30 起跑、02:00 截止）最後一條可能 01:59 才開始、03:30 才
-       * 結束，維護旗標卻在 02:30 到期——中間整整一小時 cron 會恢復派工，然後 restartSelf() 把
-       * 剛派出去的 agent 全砍掉留下 `*_running` 孤兒，正是維護視窗存在的理由，而且完全靜默。
+       * 結束，維護旗標卻在 02:30 到期——中間整整一小時 cron 會恢復派工，而批次仍在往 master 合併、
+       * 仍在改主 clone 的工作區，正是維護視窗存在的理由，而且完全靜默。
        * 選這個做法而非把 NIGHTLY_FIX_MAINTENANCE_MS 拉大：拉大治標不治本（仍有理論上限，且會讓
        * 「批次真的卡死不動」時的維護旗標多佔用好幾小時）。enterMaintenance 是冪等的 UPSERT
        * （見 maintenance.js），這裡每條開始前續期一次，成本只是一個 UPDATE；只要批次仍在推進，
@@ -899,7 +942,7 @@ async function runNightlyFix({ startedBy = null } = {}) {
       //
       // ⚠ 但「什麼都不記」也不對：若 markGroupDone **持續**拋錯（來源列被刪、FK、DB 暫時性錯誤），
       // 該候選的 status 會永遠停在 approved、fix_attempts 永遠 0——每晚重付 triage、重跑兩次全套
-      // 測試、重新 merge 進 master、重啟平台一次，且永久佔掉 NIGHTLY_FIX_MAX 一格。這是「碼已合併
+      // 測試、重新 merge 進 master 一次，且永久佔掉 NIGHTLY_FIX_MAX 一格。這是「碼已合併
       // 但收尾失敗」的第三種結局，不併進 merged／failed 任一格：走專屬的 retireToHuman，文案明講
       // 「碼已合併進 master」——這是使用者與管理員最需要知道的一句。
       let merged = false;
@@ -908,9 +951,6 @@ async function runNightlyFix({ startedBy = null } = {}) {
         attempted += 1;
         const result = await runOneCandidate(cand, { pushUserId, startedBy });
         if (result.merged) {
-          // ⚠ mergedAny 要在這裡就設：碼此刻已經在 master 上了。就算下面標記失敗，平台也必須
-          // 重啟才會載到新碼——不重啟的話現象是「碼進去了、畫面卻什麼都沒變」。
-          mergedAny = true;
           merged = true;
           // 反過來，計數要等標記成功才加：markGroupDone 拋錯代表來源沒被標掉，這一條隔晚會對
           // 已經合併的碼再跑一次，此時報「applied+1」是高報。
@@ -986,25 +1026,10 @@ async function runNightlyFix({ startedBy = null } = {}) {
       await query(`UPDATE ${t} SET batch_stage=NULL WHERE batch_stage IS NOT NULL`)
         .catch(err => console.error('[NIGHTLY-FIX] 收尾清 batch_stage 失敗：', err.message));
     }
-    // 2. 清旗標——一定要排在重啟指令之前。那道指令會把這個行程一起帶走，排在後面的話不保證
-    //    跑得到，維護旗標就會留到 4 小時後才自動到期，期間派工全部停擺。
+    // 2. 清旗標。批次收尾就到這裡為止——**不重啟**（規格 §4.3）：合併好的碼停在
+    //    `finding_fixes.status='merged'`，等平台管理員選的維護時段由 pipeline/release.js 一次放上去。
+    //    舊版在這裡 `docker restart` 自己，等於每個有合併的半夜都把在用測試區的客戶踢下線一次。
     if (entered) await leaveMaintenance().catch(() => {});
-    // 3. 一條都沒合併成功就不重啟：沒有新碼進 master，重啟只是白白中斷服務。
-    if (mergedAny) await restartSelf();
-  }
-}
-
-async function restartSelf() {
-  try {
-    const container = await selfContainerName();
-    console.log('[NIGHTLY-FIX] 重啟平台容器 %s 讓新碼生效', container);
-    execFile('docker', ['restart', container], err => {
-      if (err) console.error('[NIGHTLY-FIX] restart:', err.message);
-    });
-  } catch (err) {
-    // 查不到容器名＝重啟不了。碼已經在 master 上，人工重啟即可——但一定要留下這行字，
-    // 否則現象會是「平台跑著舊碼、畫面上什麼都沒變」。
-    console.error('[NIGHTLY-FIX] 查不到平台容器，碼已合併但未重啟，請人工重啟：', err.message);
   }
 }
 

@@ -886,10 +886,14 @@ function registerRoutes(app) {
     catch (err) { res.status(400).json({ error: err.message }); }
   });
 
-  // 套用＝合併進主分支＋推 origin＋重啟平台。在飛任務由這裡查（pipeline 不得反向 require route，
-  // 但 runner 的在飛清單本來就在 route 層可得）並傳進去，applyFix 只負責依它決定重不重啟。
+  // 套用＝合併進主分支＋推 origin，到這裡為止**不重啟**（規格 §4.3）：碼停在
+  // `finding_fixes.status='merged'`，真正的重啟等平台管理員選的維護時段，由 pipeline/release.js
+  // 做。重啟會當場砍掉在飛的 agent、讓測試區 Odoo 的 cron 執行緒永久死掉，有付費客戶之後那是
+  // 事故不是維護。
+  // 「在飛任務擋不擋」也跟著搬到那條路（release.js 的 restartNow 由呼叫端傳 inflight 進去），
+  // 所以這裡不再查 getInflightInfo() 傳給 applyFix——它已經不收這個引數了。
   app.post('/api/admin/fixes/:fixId/apply', auth, async (req, res) => {
-    try { res.json(await applyFix(parseInt(req.params.fixId, 10), req.userId, getInflightInfo())); }
+    try { res.json(await applyFix(parseInt(req.params.fixId, 10), req.userId)); }
     catch (err) { res.status(400).json({ error: err.message }); }
   });
 

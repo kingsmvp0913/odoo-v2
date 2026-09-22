@@ -1,7 +1,7 @@
 /**
  * 夜間改善批次的「今晚已經跑過」必須撐得過重啟。
  *
- * 真實事故形狀：批次只要有合併就會呼叫 nightly-fix.js 的 restartSelf()（docker restart 自己的
+ * 真實事故形狀：批次合併過的碼會在維護時段由 release.js 重啟平台（docker restart 自己的
  * 容器）。旗標若只存在記憶體，新 process 讀到 null，同一晚 22:00 之後的下一個 tick 立刻開第二批；
  * 第二批的候選來源只看 status='approved'，於是剛剛失敗的那一條被重新統整、重新改碼一遍——
  * 白花錢之外，noteFailedAttempt 會在同一晚把 fix_attempts 加兩次，NIGHTLY_FIX_MAX_ATTEMPTS=3
@@ -40,7 +40,7 @@ const NIGHT = '2026-08-25T15:00:00.000Z';
 let memDb, PgPool, dbModule;
 
 // 模擬「平台重啟」：清掉全部模組狀態重新載入，但 DB 是同一份 pg-mem。
-// 這正是 restartSelf() 之後的狀態——記憶體全新、資料還在。
+// 這正是平台重啟之後的狀態——記憶體全新、資料還在。
 function loadCron() {
   jest.resetModules();
   dbModule = require('../db');
@@ -101,7 +101,7 @@ test('批次合併後重啟：新 process 同一晚不再開第二批', async ()
   await runTickAt(first, NIGHT);
   expect(first.nightlyFix.runNightlyFix).toHaveBeenCalledTimes(1);
 
-  // restartSelf() 之後的新 process：記憶體歸零，DB 還在
+  // 平台重啟之後的新 process：記憶體歸零，DB 還在
   const restarted = loadCron();
   await clearLease();
   await runTickAt(restarted, NIGHT);
