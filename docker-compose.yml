@@ -22,6 +22,8 @@ services:
     environment:
       APP_DIR: ${HOST_REPO_DIR}
       ODOO_ENV_BASE: ${HOST_ENV_BASE}
+      # entrypoint 預設偵測 docker0 閘道，供另一個 bridge 容器的 nginx 反代；可明確覆寫。
+      BIND_HOST: ${PLATFORM_BIND_HOST:-}
       # 容器預設 UTC，會讓 cron.js 的測試區夜間關機（預設 23:00）落在台灣早上 7 點——
       # 正好是上班時間，症狀是「一早進來測試區全被關掉」，不會有任何錯誤。
       TZ: ${TZ:-Asia/Taipei}

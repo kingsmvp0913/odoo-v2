@@ -1,13 +1,25 @@
 const TOKEN_KEY = 'aidev_token';
 
+// JWT 不再永久留在 localStorage：任何同源 XSS 都能讀 Web Storage，縮短保存期至少把
+// 「關閉瀏覽器後仍可偷」降成單一分頁 session。第一次載入平滑搬移舊 token，不強迫全員登出。
+try {
+  const legacyToken = localStorage.getItem(TOKEN_KEY);
+  if (!sessionStorage.getItem(TOKEN_KEY) && legacyToken) sessionStorage.setItem(TOKEN_KEY, legacyToken);
+  localStorage.removeItem(TOKEN_KEY);
+} catch { /* 隱私模式封鎖 storage 時維持未登入 */ }
+
+const readToken = () => { try { return sessionStorage.getItem(TOKEN_KEY); } catch { return null; } };
+const writeToken = (token) => { try { sessionStorage.setItem(TOKEN_KEY, token); } catch { /* 未保存即視為未登入 */ } };
+const removeToken = () => { try { sessionStorage.removeItem(TOKEN_KEY); } catch { /* ignore */ } };
+
 const Api = {
-  // 登入狀態要能被 Vue 追蹤：localStorage 非 reactive，直接讓 computed 讀 token 會卡在
+  // 登入狀態要能被 Vue 追蹤：sessionStorage 非 reactive，直接讓 computed 讀 token 會卡在
   // 首次求值（表單登入後版面切不到殼層、必須重整）。以 reactive 旗標當單一真相，
   // 所有 token 變動一律經 setToken/clearToken 同步。
-  authState: Vue.reactive({ loggedIn: !!localStorage.getItem(TOKEN_KEY) }),
-  getToken() { return localStorage.getItem(TOKEN_KEY); },
-  setToken(t) { localStorage.setItem(TOKEN_KEY, t); this.authState.loggedIn = true; },
-  clearToken() { localStorage.removeItem(TOKEN_KEY); this.authState.loggedIn = false; },
+  authState: Vue.reactive({ loggedIn: !!readToken() }),
+  getToken() { return readToken(); },
+  setToken(t) { writeToken(t); this.authState.loggedIn = !!readToken(); },
+  clearToken() { removeToken(); this.authState.loggedIn = false; },
   isLoggedIn() { return !!this.getToken(); },
 
   async _fetch(method, path, body) {

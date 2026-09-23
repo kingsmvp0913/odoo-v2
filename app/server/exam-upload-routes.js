@@ -60,8 +60,8 @@ async function checkExamToken(req, res, next) {
   // 平台帳號也放行。X-Token 是給「不想開平台帳號的同事」用的旁路，不是唯一的路——
   // 沒有這一段的話，作戰台頁面（瀏覽器來自區網，isLocal 為 false）明明已經登入，
   // 上傳卻一律 401，而畫面上看起來像「通行碼沒設定」。
-  // 只驗簽章不查 users：這裡的授權門檻本來就低於 X-Token（那是一組共用碼），
-  // 而 index.js 的未核准閘門已經先擋過未核准帳號。
+  // JWT 路徑仍須確認帳號存在且未停用：這支 middleware 也會被直接掛在不經 verifyToken 的
+  // 上傳端點，不能假設 index.js 的附加閘門永遠替它完成帳號撤銷。
   const auth = req.headers && req.headers.authorization;
   if (auth && auth.startsWith('Bearer ')) {
     try {
@@ -70,8 +70,14 @@ async function checkExamToken(req, res, next) {
       //   本機請求＝這台主機上的截圖工具，不是客戶進得來的路；
       //   共用 X-Token 只能從 POST /api/exam/upload-token 拿，而那一支已經掛上 requireFeature，
       //   所以沒開考試功能的公司根本拿不到 token，不必在這裡重複擋。
-      const { rows: fr } = await query('SELECT company_id FROM users WHERE id = $1', [payload.userId]);
-      if (!(await companyHasFeature(fr[0] ? fr[0].company_id : null, 'exam'))) {
+      const { rows: fr } = await query(
+        'SELECT role, company_id, approved FROM users WHERE id = $1', [payload.userId]);
+      const user = fr[0];
+      if (!user) return res.status(401).json({ error: 'Invalid token' });
+      if (user.role !== 'admin' && user.approved === false) {
+        return res.status(403).json({ error: '帳號已停用' });
+      }
+      if (!(await companyHasFeature(user.company_id, 'exam'))) {
         return res.status(404).json({ error: '找不到這個功能' });
       }
       return next();

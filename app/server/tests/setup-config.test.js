@@ -2,7 +2,7 @@
 const fs = require('fs');
 const os = require('os');
 const path = require('path');
-const { ensureConfig, randomSecret } = require('../../../scripts/lib/config');
+const { ensureConfig, randomSecret, restrictConfigFile } = require('../../../scripts/lib/config');
 
 describe('randomSecret', () => {
   test('回傳非空 base64 字串，每次呼叫不同', () => {
@@ -11,6 +11,28 @@ describe('randomSecret', () => {
     expect(typeof a).toBe('string');
     expect(a.length).toBeGreaterThan(0);
     expect(a).not.toBe(b);
+  });
+});
+
+describe('restrictConfigFile', () => {
+  test('POSIX 一律收成 owner-only 0600', () => {
+    const chmodSync = jest.fn();
+    restrictConfigFile('/repo/data/config.json', { platform: 'linux', chmodSync });
+    expect(chmodSync).toHaveBeenCalledWith('/repo/data/config.json', 0o600);
+  });
+
+  test('Windows 先清除舊的明確授權與繼承，只保留目前使用者、SYSTEM 與 Administrators', () => {
+    const execFileSync = jest.fn((cmd) => cmd === 'whoami'
+      ? '"HOST\\alice","S-1-5-21-111-222-333-1001"\r\n'
+      : '');
+    restrictConfigFile('C:\\repo\\data\\config.json', { platform: 'win32', execFileSync });
+    expect(execFileSync).toHaveBeenNthCalledWith(2, 'icacls', [
+      'C:\\repo\\data\\config.json', '/reset'
+    ], { stdio: 'ignore' });
+    expect(execFileSync).toHaveBeenNthCalledWith(3, 'icacls', [
+      'C:\\repo\\data\\config.json', '/inheritance:r', '/grant:r',
+      '*S-1-5-21-111-222-333-1001:(F)', '*S-1-5-18:(F)', '*S-1-5-32-544:(F)'
+    ], { stdio: 'ignore' });
   });
 });
 

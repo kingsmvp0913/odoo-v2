@@ -129,6 +129,19 @@ describe('認證（直接測 middleware）', () => {
     expect((await run(fakeReq({ headers: { authorization: `Bearer ${jwt}` } }))).code).toBe(200);
   });
 
+  test('帳號刪除後，尚未到期的 JWT 也不得繼續上傳', async () => {
+    const { rows: [user] } = await dbModule.query(
+      `INSERT INTO users (username, password_hash, display_name, role)
+       VALUES ('deleted-exam-user', 'unused', 'Deleted', 'user') RETURNING id`);
+    const staleJwt = require('jsonwebtoken').sign(
+      { userId: user.id }, process.env.JWT_SECRET, { expiresIn: '1h' });
+    await dbModule.query('DELETE FROM users WHERE id = $1', [user.id]);
+
+    const result = await run(fakeReq({ headers: { authorization: `Bearer ${staleJwt}` } }));
+    expect(result.code).toBe(401);
+    expect(result.payload.error).toBe('Invalid token');
+  });
+
   test('壞掉的 JWT 不放行', async () => {
     expect((await run(fakeReq({ headers: { authorization: 'Bearer not-a-real-token' } }))).code).toBe(401);
   });

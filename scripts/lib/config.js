@@ -2,6 +2,7 @@
 const fs = require('fs');
 const path = require('path');
 const crypto = require('crypto');
+const { execFileSync } = require('child_process');
 const { IDENT_RE } = require('./postgres');
 
 function randomSecret() {
@@ -17,13 +18,35 @@ function assertIdent(name, val) {
   }
 }
 
+// config.json 同時持有 DB 密碼、JWT 簽章金鑰與所有 *_enc 欄位的主金鑰。
+// 不能只依賴 umask／父目錄 ACL：Windows 的 repo 常繼承「Authenticated Users 可修改」，
+// Linux 的一般 umask 則會產生 0644。每次 setup 都重套一次，連既有安裝一併修正。
+function restrictConfigFile(configPath, deps = {}) {
+  const platform = deps.platform || process.platform;
+  const chmod = deps.chmodSync || fs.chmodSync;
+  const run = deps.execFileSync || execFileSync;
+  if (platform !== 'win32') {
+    chmod(configPath, 0o600);
+    return;
+  }
+
+  const who = String(run('whoami', ['/user', '/fo', 'csv', '/nh'], { encoding: 'utf8' }));
+  const sid = who.match(/S-(?:\d+-)+\d+/i)?.[0];
+  if (!sid) throw new Error('無法取得目前 Windows 使用者 SID，config.json ACL 未收緊');
+  // 先重設明確 ACE，再移除繼承；僅 /inheritance:r 會留下檔案原本明確授予的廣泛權限。
+  run('icacls', [configPath, '/reset'], { stdio: 'ignore' });
+  run('icacls', [configPath, '/inheritance:r', '/grant:r',
+    `*${sid}:(F)`, '*S-1-5-18:(F)', '*S-1-5-32-544:(F)'], { stdio: 'ignore' });
+}
+
 async function ensureConfig(configPath, ask) {
   if (fs.existsSync(configPath)) {
     const cfg = JSON.parse(fs.readFileSync(configPath, 'utf8'));
     let changed = false;
     if (!cfg.APP_SECRET) { cfg.APP_SECRET = randomSecret(); changed = true; }
     if (!cfg.JWT_SECRET) { cfg.JWT_SECRET = randomSecret(); changed = true; }
-    if (changed) fs.writeFileSync(configPath, JSON.stringify(cfg, null, 2));
+    if (changed) fs.writeFileSync(configPath, JSON.stringify(cfg, null, 2), { mode: 0o600 });
+    restrictConfigFile(configPath);
     return cfg;
   }
 
@@ -46,8 +69,9 @@ async function ensureConfig(configPath, ask) {
   if (apiKey) cfg.ANTHROPIC_API_KEY = apiKey;
 
   fs.mkdirSync(path.dirname(configPath), { recursive: true });
-  fs.writeFileSync(configPath, JSON.stringify(cfg, null, 2));
+  fs.writeFileSync(configPath, JSON.stringify(cfg, null, 2), { mode: 0o600 });
+  restrictConfigFile(configPath);
   return cfg;
 }
 
-module.exports = { ensureConfig, randomSecret };
+module.exports = { ensureConfig, randomSecret, restrictConfigFile };

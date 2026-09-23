@@ -45,13 +45,11 @@ Module._cache[idx] = m;
 m.load(idx);
 `;
 
-function occupy(port) {
+function occupy(port, host = '127.0.0.1') {
   return new Promise((resolve, reject) => {
     const srv = net.createServer();
     srv.once('error', reject);
-    // 不指定 host：與 index.js:201 的 httpServer.listen(PORT) 綁法一致，否則 Windows 上
-    // 0.0.0.0 與 :: 是兩個不同的 socket，占不住對方
-    srv.listen(port, () => resolve(srv));
+    srv.listen(port, host, () => resolve(srv));
   });
 }
 
@@ -71,7 +69,7 @@ test('埠已被占用時重複啟動 server → 該行程必須結束，不可�
   try {
     child = spawn(process.execPath, ['-e', BOOTSTRAP], {
       cwd: APP_DIR,
-      env: { ...process.env, SERVER_DIR, PORT: String(port), JWT_SECRET: 'test-secret', DATABASE_URL: '', FATAL_LOG_DIR: fatalDir },
+      env: { ...process.env, SERVER_DIR, PORT: String(port), BIND_HOST: '127.0.0.1', JWT_SECRET: 'test-secret', DATABASE_URL: '', FATAL_LOG_DIR: fatalDir },
       stdio: ['ignore', 'pipe', 'pipe']
     });
     let out = '', err = '';

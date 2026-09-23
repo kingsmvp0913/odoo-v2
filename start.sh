@@ -11,6 +11,9 @@ if [ ! -f "$CONFIG" ]; then
   exit 1
 fi
 
+# 舊安裝也在每次啟動時收緊憑證檔權限；失敗就停止，避免帶著外洩風險開機。
+node -e "require('./scripts/lib/config').restrictConfigFile(process.argv[1])" "$CONFIG"
+
 # Shell-injection-safe: pass config path as argv, never shell-expand values
 read_config() {
   node -e "

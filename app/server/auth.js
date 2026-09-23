@@ -16,6 +16,16 @@ const JWT_SECRET = process.env.JWT_SECRET;
 if (!JWT_SECRET) throw new Error('JWT_SECRET environment variable is required');
 const JWT_EXPIRES = '7d';
 
+// 首次 setup 是「users 仍為空」這個一次性資源。兩個 HTTP 請求若同時先 SELECT 再 INSERT，
+// 都會看到 0 而各建一個 admin。平台本身是單一 Node server（重複實例另有啟動防線），
+// 在這裡序列化即可讓第二個請求重新讀 DB 並得到 403；失敗不會卡死後續請求。
+let setupQueue = Promise.resolve();
+function serializeSetup(fn) {
+  const run = setupQueue.then(fn, fn);
+  setupQueue = run.catch(() => {});
+  return run;
+}
+
 function signToken(userId) {
   return jwt.sign({ userId }, JWT_SECRET, { expiresIn: JWT_EXPIRES });
 }
@@ -117,26 +127,28 @@ function registerRoutes(app) {
   // POST /api/auth/setup — create first admin (only when users table is empty)
   app.post('/api/auth/setup', async (req, res) => {
     try {
-      const { rows } = await query('SELECT COUNT(*) AS n FROM users');
-      if (parseInt(rows[0].n, 10) > 0) {
-        return res.status(403).json({ error: 'Setup already completed' });
-      }
+      await serializeSetup(async () => {
+        const { rows } = await query('SELECT COUNT(*) AS n FROM users');
+        if (parseInt(rows[0].n, 10) > 0) {
+          return res.status(403).json({ error: 'Setup already completed' });
+        }
 
-      const { username, password, display_name } = req.body;
-      if (!username || !password || !display_name) {
-        return res.status(400).json({ error: 'username, password, display_name required' });
-      }
-      if (password.length < 8) {
-        return res.status(400).json({ error: '密碼至少 8 個字元' });
-      }
+        const { username, password, display_name } = req.body;
+        if (!username || !password || !display_name) {
+          return res.status(400).json({ error: 'username, password, display_name required' });
+        }
+        if (password.length < 8) {
+          return res.status(400).json({ error: '密碼至少 8 個字元' });
+        }
 
-      const password_hash = await hashPassword(password);
-      const { rows: inserted } = await query(
-        'INSERT INTO users (username, password_hash, display_name, role) VALUES ($1, $2, $3, $4) RETURNING id',
-        [username, password_hash, display_name, 'admin']
-      );
+        const password_hash = await hashPassword(password);
+        const { rows: inserted } = await query(
+          'INSERT INTO users (username, password_hash, display_name, role) VALUES ($1, $2, $3, $4) RETURNING id',
+          [username, password_hash, display_name, 'admin']
+        );
 
-      res.json({ token: signToken(inserted[0].id) });
+        return res.json({ token: signToken(inserted[0].id) });
+      });
     } catch (err) {
       res.status(500).json({ error: err.message });
     }

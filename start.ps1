@@ -8,6 +8,11 @@ if (-not (Test-Path $configPath)) {
     exit 1
 }
 
+# 舊安裝也在每次啟動時收緊憑證檔 ACL；失敗就停止，避免帶著外洩風險開機。
+$configLib = Join-Path $Root "scripts\lib\config.js"
+node -e "require(process.argv[2]).restrictConfigFile(process.argv[1])" $configPath $configLib
+if ($LASTEXITCODE -ne 0) { Write-Host "Error: config.json 權限設定失敗。" -ForegroundColor Red; exit 1 }
+
 try {
     $config = Get-Content $configPath -Raw | ConvertFrom-Json
 } catch {

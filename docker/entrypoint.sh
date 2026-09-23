@@ -26,6 +26,8 @@ fi
 BRIDGE_CIDR="$(ip -4 -o addr show docker0 2>/dev/null | awk '{print $4}' | head -1)"
 BRIDGE_ADDR="${PG_BRIDGE_ADDR:-${BRIDGE_CIDR%%/*}}"
 BRIDGE_NET="${PG_BRIDGE_NET:-$(python3 -c "import ipaddress,sys; print(ipaddress.ip_network(sys.argv[1], strict=False))" "$BRIDGE_CIDR" 2>/dev/null)}"
+# Node 與橋接網路上的反代 nginx 通訊；未偵測到 docker0 才退回僅本機可連。
+export BIND_HOST="${BIND_HOST:-${BRIDGE_ADDR:-127.0.0.1}}"
 if [ -z "$BRIDGE_ADDR" ]; then
   echo "[entrypoint] 警告：偵測不到 docker0 位址，測試區容器將連不到平台資料庫（可設 PG_BRIDGE_ADDR 指定）"
 fi

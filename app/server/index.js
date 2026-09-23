@@ -3,6 +3,7 @@ const { createServer } = require('http');
 const { Server } = require('socket.io');
 const path = require('path');
 const fs = require('fs');
+const crypto = require('crypto');
 const { registerRoutes: registerAuthRoutes } = require('./auth');
 const { registerRoutes: registerSettingsRoutes } = require('./settings');
 const { registerRoutes: registerTasksRoutes } = require('./tasks-routes');
@@ -32,9 +33,58 @@ const { registerRoutes: registerCompanyRoutes } = require('./company-routes');
 const { registerRoutes: registerReleaseRoutes } = require('./release-routes');
 
 const PORT = process.env.PORT || 3939;
+// 非 Docker 直接啟動時只供本機使用；Docker entrypoint 會偵測 docker0 閘道供 nginx 反代。
+const BIND_HOST = process.env.BIND_HOST || '127.0.0.1';
+
+function sameOriginSocketRequest(req, callback) {
+  const origin = req.headers && req.headers.origin;
+  if (!origin) return callback(null, true); // 非瀏覽器 client 沒有 Origin，仍須通過後續 JWT
+  try {
+    const originHost = new URL(origin).host.toLowerCase();
+    const requestHost = String(req.headers.host || '').toLowerCase();
+    return callback(null, !!requestHost && originHost === requestHost);
+  } catch {
+    return callback(null, false);
+  }
+}
 
 function createApp() {
   const app = express();
+  app.use((req, res, next) => {
+    // 所有回應共用的瀏覽器防線。CSP 只對正式介面與 setup 啟用；styleguide／preview 是純開發
+    // 頁面，仍有大量 inline demo script，不讓它們逼正式介面退回 unsafe-inline。
+    res.set({
+      'X-Content-Type-Options': 'nosniff',
+      'X-Frame-Options': 'DENY',
+      'Referrer-Policy': 'no-referrer',
+      'Permissions-Policy': 'camera=(), microphone=(), geolocation=()',
+      'Cross-Origin-Opener-Policy': 'same-origin',
+      'Cross-Origin-Resource-Policy': 'same-origin',
+    });
+    if (req.path !== '/styleguide.html' && req.path !== '/ui-next-preview.html') {
+      res.locals.cspNonce = crypto.randomBytes(18).toString('base64');
+      // Vue 的 runtime template compiler 需要 unsafe-eval；真正危險的 inline script／event handler
+      // 仍完全禁止。若日後改成預編譯 template，才能再拿掉 unsafe-eval。
+      res.set('Content-Security-Policy', [
+        "default-src 'self'",
+        `script-src 'self' 'unsafe-eval' 'nonce-${res.locals.cspNonce}'`,
+        "style-src 'self' 'unsafe-inline'",
+        "img-src 'self' data: blob:",
+        "font-src 'self' data:",
+        "connect-src 'self' ws: wss:",
+        "media-src 'self' data: blob:",
+        "frame-src 'self'",
+        "object-src 'none'",
+        "base-uri 'self'",
+        "form-action 'self'",
+        "frame-ancestors 'none'",
+      ].join('; '));
+    }
+    if (req.secure || String(req.headers['x-forwarded-proto'] || '').toLowerCase() === 'https') {
+      res.set('Strict-Transport-Security', 'max-age=31536000');
+    }
+    next();
+  });
   app.use(express.json());
 
   // index.html 的資產版本號原本是寫死的 ?v=20260910：改了 CSS／JS 卻沒動那串數字，
@@ -66,15 +116,17 @@ function createApp() {
   const sendIndex = (req, res) => {
     try {
       const html = fs.readFileSync(path.join(PUBLIC_DIR, 'index.html'), 'utf8')
-        .replace(/\?v=\d+/g, `?v=${Math.round(newestAssetMtime())}`);
+        .replace(/\?v=\d+/g, `?v=${Math.round(newestAssetMtime())}`)
+        .replace(/<script>/g, `<script nonce="${res.locals.cspNonce}">`);
       // 版本號寫在 index.html 裡，所以 index.html 自己絕不能被瀏覽器直接吃快取——那樣整套
       // cache-busting 會被繞過：改了碼、版本號也算對了，使用者卻連請求都沒發出去，畫面照舊。
       // no-cache 不是不快取，是「每次都回來驗證」，ETag 沒變仍走 304，沒有額外流量成本。
       res.set('Cache-Control', 'no-cache');
       res.type('html').send(html);
     } catch {
-      // 讀檔或取代失敗時退回原本行為，寧可拿到舊快取也不要整站白畫面
-      res.sendFile(path.join(PUBLIC_DIR, 'index.html'));
+      // 不能退回 sendFile 原始 index：它的 inline loader 沒有當次 nonce，CSP 會全部擋掉，
+      // 看似 200 實際仍是白畫面。明確 500 才不會把部署缺檔偽裝成前端問題。
+      res.status(500).type('text').send('index.html 無法讀取');
     }
   };
   app.get(['/', '/index.html'], sendIndex);
@@ -301,7 +353,7 @@ if (require.main === module) {
 
   const app = createApp();
   const httpServer = createServer(app);
-  const io = new Server(httpServer, { cors: { origin: '*' } });
+  const io = new Server(httpServer, { allowRequest: sameOriginSocketRequest });
 
   // 與 auth.js 的 verifyToken 同一條規則：簽章有效不等於帳號還在。JWT 最長 7 天，
   // 帳號被刪之後舊 token 仍驗得過——HTTP 端已補上「users 列是否還在」的檢查，這裡若不補，
@@ -459,8 +511,8 @@ if (require.main === module) {
         `無法綁定埠 ${PORT}（${err.code || err.message}）——很可能已有另一個 server 在跑`
       ));
     });
-    httpServer.listen(PORT, () => {
-      console.log(`AI Dev http://localhost:${PORT}`);
+    httpServer.listen(PORT, BIND_HOST, () => {
+      console.log(`AI Dev http://${BIND_HOST}:${PORT}`);
       startCron();
       booted = true;
       // 語意檢索的兩件啟動工作，一律背景做、絕不擋 listen：模型載入實測約 11 秒，快取要掃全表。
@@ -479,4 +531,4 @@ if (require.main === module) {
   });
 }
 
-module.exports = { createApp };
+module.exports = { createApp, sameOriginSocketRequest };
