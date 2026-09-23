@@ -1,6 +1,9 @@
 -- 建立非 superuser 的 Odoo 專用 role（app 與測試環境共用）
--- 沿用現有密碼，CREATEDB 供 Odoo 建立測試 DB
-CREATE ROLE odoo WITH LOGIN PASSWORD 'Ji3cl3gj94!' CREATEDB;
+-- 以 ODOO_DB_PASSWORD 環境變數提供密碼；勿將密碼寫入版控。
+-- 本腳本只供首次建立 role，變更既有密碼須另行安排設定同步。
+\set ON_ERROR_STOP on
+\getenv odoo_password ODOO_DB_PASSWORD
+CREATE ROLE odoo WITH LOGIN PASSWORD :'odoo_password' CREATEDB;
 
 -- 授予存取 app 既有的 claude 資料庫
 GRANT ALL ON DATABASE claude TO odoo;
