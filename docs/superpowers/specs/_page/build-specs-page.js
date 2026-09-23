@@ -2,8 +2,8 @@
 const fs = require('fs');
 const path = require('path');
 
-const SPEC_DIR = '/home/odoo/odoo-v2/docs/superpowers/specs';
 const HERE = __dirname;
+const SPEC_DIR = path.resolve(HERE, '..');
 
 const docs = [
   { id: 'overview', num: '', label: '總覽', deps: '從這裡開始', file: '2026-09-11-productize-overview.md' },

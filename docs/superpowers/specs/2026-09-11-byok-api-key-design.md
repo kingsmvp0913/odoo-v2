@@ -1,7 +1,7 @@
 # 客戶自帶 API key 設計（平台產品化 子專案 2）
 
 日期：2026-09-11
-狀態：初稿，待使用者審閱（含「待你決定」§8）
+狀態：P1～P4 已於 2026-09-14 裁決；認證切換已部分實作，花費上限與公司管理員報表仍待做（進度以「開發順序」§0 為準）
 前置：子專案 0（容器與環境變數白名單）、子專案 1（公司）
 總覽：`2026-09-11-productize-overview.md`
 
@@ -71,22 +71,22 @@
 
 | 欄位 | 說明 |
 |---|---|
-| `anthropic_api_key_enc` | `lib/crypto.js` 加密 |
+| `anthropic_key_enc` | `lib/crypto.js` 加密；目前已實作，名稱以實際資料庫欄位為準 |
 | `anthropic_key_last4` | 畫面上顯示「••••abcd」用 |
 | `anthropic_key_set_by`、`anthropic_key_set_at` | 誰、什麼時候設的 |
 | `anthropic_key_verified_at` | 最後一次驗證成功時間 |
 | `task_budget_usd` | 單張任務花費上限（§4.5） |
 
-GET 只回 `anthropic_key_set: true/false` 與後四碼，**永遠不回原文**（比照記憶 password-no-longer-returned-to-browser）。PUT 沒帶 key 就沿用舊值。
+GET 只回是否已設定與後四碼，**永遠不回原文**（比照記憶 password-no-longer-returned-to-browser）。目前管理員 API 只回 `has_anthropic_key`，後四碼、設定者與時間尚未實作；這些欄位不能因目前沒有就視為已完成。PUT 沒帶 key 就沿用舊值。
 
 ### 4.2 誰能設
 
 - 公司管理員：在新的「公司設定」頁填（內部公司不需要填）。
-- 平台管理員能不能代填，見 §8 P1。
+- 平台管理員可代填（§8 P1 已決）。目前只有平台管理員的 API／畫面已實作，公司管理員自行填 key 的入口仍待做。
 
 ### 4.3 存檔前驗證
 
-用這把 key 跑一次最小的 `claude -p`（比照 `admin-routes.js:75`，把環境變數換成 `ANTHROPIC_API_KEY`），**失敗就不存**，把錯誤原文顯示給客戶。
+用這把 key 跑一次最小的 `claude -p`（把環境變數換成 `ANTHROPIC_API_KEY`）。**認證失敗就不存**；網路或服務暫時失敗時可儲存，但必須明確告知「未完成驗證」，不得顯示成驗證成功。
 這次驗證本身也要走子專案 0 的容器。
 
 ### 4.4 注入規則
@@ -123,7 +123,7 @@ GET 只回 `anthropic_key_set: true/false` 與後四碼，**永遠不回原文**
 **讓累計數字更準**：`token_usage` 新增 `cost_usd` 欄位，直接記 `result` 事件的 `total_cost_usd`（有這個值時優先用它，沒有才用 `costSql` 估）。
 沒有產生 `result` 的失敗輪仍然會漏記，列入 §9 已知風險。
 
-上限預設值見 §8 P2。
+上限預設值依 §8 P2：先用歷史任務的 p90／p99 算出候選數值，再由產品負責人確認；尚未有已核准的美元數值。
 
 ### 4.6 錯誤處理
 
@@ -139,7 +139,7 @@ rules/infra 132：`Not logged in` 這類認證錯誤走 stdout 不走 stderr，�
 
 ### 4.7 客戶看得到花費嗎
 
-見 §8 P3。
+公司管理員可看自家公司用量報表，後端強制公司範圍；平台管理員可依公司篩選。Claude 訂閱額度頁不開給客戶（§8 P3 已決）。
 
 ### 4.8 條款遵循（不是程式，但上線前一定要做）
 
@@ -176,7 +176,7 @@ rules/infra 132：`Not logged in` 這類認證錯誤走 stdout 不走 stderr，�
 
 ---
 
-## 8. 待你決定
+## 8. 已裁決事項
 
 | # | 問題 | 建議 | 其他選項 |
 |---|---|---|---|

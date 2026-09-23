@@ -422,6 +422,17 @@ describe('步驟層 adminOnly：一般使用者看到的步驟與編號', () => 
     expect(hostCtx(USER, 'project', 3).step).toBeUndefined();
   });
 
+  test('「實際流程」第⑤步保留給一般使用者，但不點管理員才看得到的執行歷程', () => {
+    const admin = hostCtx(ADMIN, 'flow', 4).step;
+    const user = hostCtx(USER, 'flow', 4).step;
+    expect(admin.click).toBe('[data-tour="td-events-open"]');
+    expect(admin.target).toBe('[data-tour="td-events"]');
+    expect(user.title).toBe(admin.title);
+    expect(user.click).toBeFalsy();
+    expect(user.target).toBe('[data-tour="td-action"]');
+    expect(user.text).not.toContain('即時歷程');
+  });
+
   test('每一門可見課程從第 1 步走到 lastIdx 都取得到步驟（任一格空掉＝編號錯位）', () => {
     const courses = hostCtx(USER, null, 0).courses;
     expect(courses.length).toBeGreaterThanOrEqual(6);
@@ -447,7 +458,7 @@ describe('步驟層 adminOnly：一般使用者看到的步驟與編號', () => 
 
   // ── 對帳：哪些錨點在原始碼裡就掛著 isAdmin。自動掃出來而不是寫死清單——
   // 寫死的清單會在下一個功能被藏起來時腐爛成假事實（本檔開頭那份檔案清單就是前車之鑑）。
-  describe('掛著 isAdmin 的錨點，課程要嘛標了 adminOnly，要嘛是列名的例外', () => {
+  describe('掛著 isAdmin 的錨點，不能出現在一般使用者看到的步驟', () => {
     const NEXT_DIR = path.join(publicDir, 'js/ui-next');
     const walk = (dir) => fs.readdirSync(dir, { withFileTypes: true }).flatMap((e) => {
       const full = path.join(dir, e.name);
@@ -468,20 +479,13 @@ describe('步驟層 adminOnly：一般使用者看到的步驟與編號', () => 
       expect([...gated].sort()).toEqual(['proj-add', 'td-events-open']);
     });
 
-    // 例外要在這裡列名並寫理由，不能默默放過。
-    // td-events-open：這一步真正教的是「這四關不用你出手」，對所有角色都成立；而且「實際流程」
-    // 課的標題寫死了 ①～⑨，濾掉第 ⑤ 步會變成 ①②③④⑥⑦⑧⑨ 配「5 / 8」，補救得改標題＝改內容。
-    // 使用者尚未裁決，所以刻意留著；要收掉時連標題編號一起處理。
-    const EXEMPT = new Set(['td-events-open']);
-
-    test.each([...gated])('用到 %s 的步驟都標了 adminOnly（或列名豁免）', (anchor) => {
+    test.each([...gated])('一般使用者不會被導向 %s', (anchor) => {
       const sel = `[data-tour="${anchor}"]`;
-      const users = authored.flatMap(c => c.steps
+      expect(authored.some(c => c.steps.some(s => s.target === sel || s.click === sel))).toBe(true);
+      const offenders = hostCtx(USER, null, 0).courses.flatMap(c => c.steps
         .filter(s => s.target === sel || s.click === sel)
-        .map(s => ({ where: `${c.id}/${s.title}`, ok: !!(c.adminOnly || s.adminOnly) })));
-      expect(users.length).toBeGreaterThan(0);
-      const bad = users.filter(u => !u.ok && !EXEMPT.has(anchor)).map(u => u.where);
-      expect(bad).toEqual([]);
+        .map(s => `${c.id}/${s.title}`));
+      expect(offenders).toEqual([]);
     });
   });
 
