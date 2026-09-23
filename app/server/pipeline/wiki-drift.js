@@ -42,7 +42,9 @@ async function enqueueWikiDrift({ projectId, taskId, userId, source, slug, reaso
 // best-effort：單筆錯誤不影響其他筆，函式錯誤不影響其他 cron 工作。無 new 即早退、成本近零。
 async function classifyPendingWikiDrift() {
   const { rows } = await query(
-    "SELECT id, task_id, project_id, user_id, slug, reason FROM wiki_drift WHERE status='new' ORDER BY id LIMIT $1",
+    `SELECT d.id, d.task_id, d.project_id, d.user_id, d.slug, d.reason, t.id AS task_db_id
+       FROM wiki_drift d LEFT JOIN tasks t ON t.task_id = d.task_id
+      WHERE d.status='new' ORDER BY d.id LIMIT $1`,
     [BATCH]
   );
   for (const d of rows) await classifyOne(d);
@@ -50,12 +52,17 @@ async function classifyPendingWikiDrift() {
 }
 
 async function classifyOne(d) {
+  // 對話回報沒有 task_id；任務回報若已找不到任務，就不可失去預算歸屬後繼續花錢。
+  if (d.task_id && !d.task_db_id) {
+    await query("UPDATE wiki_drift SET status='error' WHERE id=$1", [d.id]);
+    return;
+  }
   const agent = loadAgent('wiki-drift-classifier');
   let category = null;
   try {
     const r = await runAgent(
       agent.render({ slug: d.slug || '（未指定）', reason: d.reason }),
-      { model: agent.model, provider: agent.provider, effort: agent.effort, agentType: 'wiki_drift_classify', projectId: d.project_id, userId: d.user_id }
+      { model: agent.model, provider: agent.provider, effort: agent.effort, agentType: 'wiki_drift_classify', projectId: d.project_id, userId: d.user_id, taskId: d.task_db_id || undefined }
     );
     const { usage, durationMs } = r;
     const text = r.raw ?? r.text;

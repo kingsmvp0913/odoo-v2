@@ -605,6 +605,7 @@ test('A-3 unknown → 叫 deploy-fix agent；回 env → 走 env 路徑', async 
   envAgent.upgradeModules.mockRejectedValue(new Error('some novel unrecognized failure zzz'));
   const id = await makeTask(0);
   await runDeployTesting(id, userId);
+  expect(runClaude.mock.calls[0][1].taskId).toBe(id); // 部署分類的補救 AI 也要吃同張任務預算
   const { rows: [t] } = await dbModule.query('SELECT status, blocker_type, deploy_retry_count FROM tasks WHERE id=$1', [id]);
   expect(t.status).toBe('stopped');
   expect(t.blocker_type).toBe('env');

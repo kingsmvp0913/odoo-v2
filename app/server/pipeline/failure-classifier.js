@@ -92,7 +92,7 @@ async function classifyFailureWithAgent(text, opts = {}) {
   let verdict = 'env', agentOk = false;
   try {
     const agent = loadAgent('deploy-fix');
-    const { text: out, usage, durationMs } = await runAgent(agent.render({ error_text: errText }), { model: agent.model, provider: agent.provider, effort: agent.effort, agentType: 'deploy_fix', projectId: opts.projectId, userId: opts.userId });
+    const { text: out, usage, durationMs } = await runAgent(agent.render({ error_text: errText }), { model: agent.model, provider: agent.provider, effort: agent.effort, agentType: 'deploy_fix', projectId: opts.projectId, userId: opts.userId, taskId: opts.taskDbId });
     // 分類用的 haiku 也要記帳（成本核算無盲區）；有 context 才記
     if (opts.taskId || opts.projectId) {
       await logTokenUsage({ taskId: opts.taskId, projectId: opts.projectId }, opts.userId, 'deploy_fix', usage, durationMs);

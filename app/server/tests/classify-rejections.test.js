@@ -17,6 +17,10 @@ beforeAll(async () => {
   userId = u.id;
   const { rows: [p] } = await dbModule.query("INSERT INTO projects (name,odoo_version) VALUES ('CP','17.0') RETURNING id");
   projectId = p.id;
+  await dbModule.query(
+    "INSERT INTO tasks (user_id, task_id, source, title, original_text, status, project_id) VALUES ($1, 'task_odoo_1', 'odoo', 'Test', 'content', 'review_pending', $2)",
+    [userId, projectId]
+  );
   ({ classifyPendingRejections } = require('../pipeline/classify-rejections'));
 });
 afterAll(() => dbModule._setPoolForTesting(null));
@@ -37,6 +41,8 @@ test('new 退回 → 分類 agent 拆多項寫 rejection_items、status=classifi
   });
   const rid = await insertRejection('備註型別錯，另想改預設收合');
   await classifyPendingRejections();
+  const { rows: [task] } = await dbModule.query("SELECT id FROM tasks WHERE task_id='task_odoo_1'");
+  expect(mockRunClaude.mock.calls[0][1].taskId).toBe(task.id);
 
   const { rows: [r] } = await dbModule.query('SELECT status FROM task_rejections WHERE id=$1', [rid]);
   expect(r.status).toBe('classified');
@@ -55,6 +61,32 @@ test('分類輸出無法解析 → status=error、不寫 items、下一 tick 不
   expect(r.status).toBe('error');
   const { rows: items } = await dbModule.query('SELECT * FROM rejection_items WHERE rejection_id=$1', [rid]);
   expect(items.length).toBe(0);
+});
+
+test('退回所屬任務已不存在 → 不開 AI，直接標 error', async () => {
+  const { rows: [rejection] } = await dbModule.query(
+    "INSERT INTO task_rejections (task_id, project_id, user_id, reason, status) VALUES ('missing_task',$1,$2,'old','new') RETURNING id",
+    [projectId, userId]
+  );
+  await classifyPendingRejections();
+  expect(mockRunClaude).not.toHaveBeenCalled();
+  const { rows: [row] } = await dbModule.query('SELECT status FROM task_rejections WHERE id=$1', [rejection.id]);
+  expect(row.status).toBe('error');
+});
+
+test('平台管理員代退客戶任務時，分類 AI 以任務建立者認證並記帳', async () => {
+  const { rows: [reviewer] } = await dbModule.query(
+    "INSERT INTO users (username,password_hash,display_name,role) VALUES ('reviewer','h','Reviewer','admin') RETURNING id"
+  );
+  await dbModule.query(
+    "INSERT INTO task_rejections (task_id, project_id, user_id, reason, status) VALUES ('task_odoo_1',$1,$2,'請修正','new')",
+    [projectId, reviewer.id]
+  );
+  mockRunClaude.mockResolvedValue({ text: '<result>[]</result>' });
+  await classifyPendingRejections();
+  expect(mockRunClaude.mock.calls[0][1].userId).toBe(userId);
+  const { logTokenUsage } = require('../pipeline/token-logger');
+  expect(logTokenUsage.mock.calls.at(-1)[1]).toBe(userId);
 });
 
 test('無 new 退回 → 不呼叫 runClaude（零成本早退）', async () => {

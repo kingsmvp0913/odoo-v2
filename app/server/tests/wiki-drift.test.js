@@ -19,6 +19,10 @@ beforeAll(async () => {
   userId = u.id;
   const { rows: [p] } = await dbModule.query("INSERT INTO projects (name,odoo_version) VALUES ('CP','17.0') RETURNING id");
   projectId = p.id;
+  await dbModule.query(
+    "INSERT INTO tasks (user_id, task_id, source, title, original_text, status, project_id) VALUES ($1, 'task_wiki_drift', 'odoo', 'Test', 'content', 'done', $2)",
+    [userId, projectId]
+  );
   wd = require('../pipeline/wiki-drift');
 });
 afterAll(() => dbModule._setPoolForTesting(null));
@@ -79,6 +83,22 @@ describe('enqueue + classify', () => {
     const { rows: [r] } = await dbModule.query('SELECT status, category FROM wiki_drift WHERE id=$1', [id]);
     expect(r.status).toBe('error');
     expect(r.category).toBeNull();
+  });
+
+  test('任務衍生的漂移分類帶上 DB taskId，不能繞過任務花費上限', async () => {
+    mockRunClaude.mockResolvedValue({ text: '<result>{"category":"過時"}</result>' });
+    await wd.enqueueWikiDrift({ projectId, taskId: 'task_wiki_drift', userId, source: 'cs', reason: '頁面過時' });
+    await wd.classifyPendingWikiDrift();
+    const { rows: [task] } = await dbModule.query("SELECT id FROM tasks WHERE task_id='task_wiki_drift'");
+    expect(mockRunClaude.mock.calls[0][1].taskId).toBe(task.id);
+  });
+
+  test('漂移回報的任務已不存在 → 不開 AI，直接標 error', async () => {
+    const id = await wd.enqueueWikiDrift({ projectId, taskId: 'missing_task', userId, source: 'cs', reason: '舊任務' });
+    await wd.classifyPendingWikiDrift();
+    expect(mockRunClaude).not.toHaveBeenCalled();
+    const { rows: [row] } = await dbModule.query('SELECT status FROM wiki_drift WHERE id=$1', [id]);
+    expect(row.status).toBe('error');
   });
 
   test('無 new → 不呼叫 runClaude（零成本早退）', async () => {

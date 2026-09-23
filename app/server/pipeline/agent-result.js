@@ -1,4 +1,5 @@
 const { runAgent } = require('./agent-runner');
+const { query } = require('../db');
 const yaml = require('js-yaml');
 const { logTokenUsage, logFailedUsage } = require('./token-logger');
 
@@ -61,6 +62,14 @@ const REPAIR_PROMPT = (raw, err, schemaHint) =>
     '輸出若沒有明說對應的值，就依它實際做了什麼如實填，不要編造。' : '') +
   '\n\n' + raw;
 
+// 格式補救也是同一張任務的 AI 花費；先把對外 task_id 換成 DB id，才能走容器的剩餘額度檢查。
+async function repairTaskDbId(ref) {
+  if (!ref?.taskId) return null;
+  const { rows: [task] } = await query('SELECT id FROM tasks WHERE task_id=$1', [ref.taskId]);
+  if (!task) throw new Error('找不到格式補救所屬任務，停止 AI 呼叫以免繞過花費上限');
+  return task.id;
+}
+
 // 解析 agent 輸出。順序刻意排成「先免費、再便宜、最後才貴」：
 //   1. 嚴格解析
 //   2. lenientParse（呼叫端提供，零成本）——契約若是「散文回覆 ＋ 分隔線 ＋ 結構化附載」，
@@ -84,11 +93,12 @@ async function parseAgentResult(raw, { parse, lenientParse, schemaHint, signal, 
     out = doParse(lenientParse, inner);
     if (out != null) return out;   // 部分結果：缺的那半邊由呼叫端負責補回來
   }
+  const taskId = await repairTaskDbId(ref);
   try {
     // 契約補救固定 Claude/haiku：只做文字整形，不隨原 agent 改 provider 以免多一個變數。
     // userId 一併帶入（本函式的參數本來就有）：這通 runAgent 一樣會經過 canRun 的公司可用性
     // 檢查（規格 §7），漏帶會讓公司已停用的客戶還能透過「輸出格式壞掉觸發補救」繼續燒 AI 的錢。
-    const repaired = await runAgent(REPAIR_PROMPT(raw, parseErr, schemaHint), { provider: 'claude', model: 'haiku', signal, agentType: 'repair', userId });
+    const repaired = await runAgent(REPAIR_PROMPT(raw, parseErr, schemaHint), { provider: 'claude', model: 'haiku', signal, agentType: 'repair', userId, taskId });
     if (ref) await logTokenUsage(ref, userId, 'repair', repaired.usage, repaired.durationMs);
     out = doParse(parse, extractResult(repaired.raw ?? repaired.text));
   } catch (err) {
@@ -110,10 +120,11 @@ async function repairYamlPayload(yamlStr, parseErr, { schemaHint, signal, ref, u
     (parseErr ? `\n\n解析器的錯誤訊息是「${parseErr}」，請針對它修正。` : '') +
     (schemaHint ? `\n\n這份 YAML 應有的結構：\n${schemaHint}` : '') +
     '\n\n' + yamlStr;
+  const taskId = await repairTaskDbId(ref);
   let fixed = null;
   try {
     // userId 理由同 parseAgentResult 那通 repair 呼叫：canRun 的公司可用性檢查靠它才擋得住。
-    const r = await runAgent(prompt, { provider: 'claude', model: 'haiku', signal, agentType: 'repair', userId });
+    const r = await runAgent(prompt, { provider: 'claude', model: 'haiku', signal, agentType: 'repair', userId, taskId });
     if (ref) await logTokenUsage(ref, userId, 'repair', r.usage, r.durationMs);
     fixed = extractResult(r.raw ?? r.text);
   } catch (err) {

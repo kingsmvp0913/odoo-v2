@@ -12,7 +12,9 @@ const BATCH = parseInt(process.env.REJECT_CLASSIFY_BATCH || '3', 10);
 // best-effort：單筆錯誤不影響其他退回，函式錯誤不影響其他 cron 工作。無 new 即早退、成本近零。
 async function classifyPendingRejections() {
   const { rows } = await query(
-    "SELECT id, task_id, project_id, user_id, reason FROM task_rejections WHERE status='new' ORDER BY id LIMIT $1",
+    `SELECT tr.id, tr.task_id, tr.project_id, tr.user_id, tr.reason, t.id AS task_db_id, t.user_id AS task_user_id
+       FROM task_rejections tr LEFT JOIN tasks t ON t.task_id = tr.task_id
+      WHERE tr.status='new' ORDER BY tr.id LIMIT $1`,
     [BATCH]
   );
   for (const rej of rows) await classifyOne(rej);
@@ -20,18 +22,23 @@ async function classifyPendingRejections() {
 }
 
 async function classifyOne(rej) {
+  // 任務已不存在就沒有可查的花費上限；不可繼續開 AI 呼叫。
+  if (!rej.task_db_id) {
+    await query("UPDATE task_rejections SET status='error' WHERE id=$1", [rej.id]);
+    return;
+  }
   const agent = loadAgent('reject-classifier');
   let items = null;
   try {
-    const r = await runAgent(agent.render({ reason: rej.reason }), { model: agent.model, provider: agent.provider, effort: agent.effort, agentType: 'reject_classify', projectId: rej.project_id, userId: rej.user_id });
+    const r = await runAgent(agent.render({ reason: rej.reason }), { model: agent.model, provider: agent.provider, effort: agent.effort, agentType: 'reject_classify', projectId: rej.project_id, userId: rej.task_user_id, taskId: rej.task_db_id });
     const { usage, durationMs } = r;
     const text = r.raw ?? r.text;
-    await logTokenUsage({ taskId: rej.task_id, projectId: rej.project_id }, rej.user_id, 'reject_classify', usage, durationMs);
-    const parsed = await parseAgentResult(text, { parse: JSON.parse, ref: { taskId: rej.task_id, projectId: rej.project_id }, userId: rej.user_id });
+    await logTokenUsage({ taskId: rej.task_id, projectId: rej.project_id }, rej.task_user_id, 'reject_classify', usage, durationMs);
+    const parsed = await parseAgentResult(text, { parse: JSON.parse, ref: { taskId: rej.task_id, projectId: rej.project_id }, userId: rej.task_user_id });
     // 空陣列是合法結果（agent 判定無可拆項目）→ 視為已分類（零項目），不落 error
     if (Array.isArray(parsed)) items = parsed;
   } catch (err) {
-    await logFailedUsage({ taskId: rej.task_id, projectId: rej.project_id }, rej.user_id, 'reject_classify', err);
+    await logFailedUsage({ taskId: rej.task_id, projectId: rej.project_id }, rej.task_user_id, 'reject_classify', err);
   }
   if (!items) {
     await query("UPDATE task_rejections SET status='error' WHERE id=$1", [rej.id]).catch(() => {});

@@ -348,7 +348,7 @@ async function doDeploy(task, taskId, userId, signal) {
   // 解析失敗回空陣列＝升級全部，維持原本的降級行為。
   const mods = specModules(task.analysis_yaml);
   const moduleName = mods.join(',');
-  const clsCtx = { taskId: task.task_id, projectId: task.project_id, userId };
+  const clsCtx = { taskId: task.task_id, taskDbId: task.id, projectId: task.project_id, userId };
 
   // 規格明確宣告不動任何模組（module: none）：本關唯一的工作——安裝／升級模組——沒有對象。
   // 不可落到下面的降級路徑：mods 為空時 upgradeModules 會跑 -u all，把測試區所有模組重升一輪

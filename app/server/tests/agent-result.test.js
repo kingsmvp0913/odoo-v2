@@ -6,10 +6,15 @@ jest.mock('../pipeline/claude-runner', () => ({ runClaude: mockRunClaude }));
 const mockLogUsage = jest.fn();
 const mockLogFailed = jest.fn();
 jest.mock('../pipeline/token-logger', () => ({ logTokenUsage: mockLogUsage, logFailedUsage: mockLogFailed }));
+const mockQuery = jest.fn();
+jest.mock('../db', () => ({ query: mockQuery }));
 
 const { extractResult, parseAgentResult, repairYamlPayload } = require('../pipeline/agent-result');
 
-beforeEach(() => { mockRunClaude.mockReset(); mockLogUsage.mockReset(); mockLogFailed.mockReset(); });
+beforeEach(() => {
+  mockRunClaude.mockReset(); mockLogUsage.mockReset(); mockLogFailed.mockReset();
+  mockQuery.mockReset().mockResolvedValue({ rows: [{ id: 42 }] });
+});
 
 test('extractResult：剝除 ```json fence 取出 JSON', () => {
   const r = extractResult('前言\n<result>\n```json\n{"a":1}\n```\n</result>\n後');
@@ -79,6 +84,20 @@ test('parseAgentResult：帶 ref → 補救呼叫的 usage 記帳為 repair', as
   const v = await parseAgentResult('壞', { parse: JSON.parse, ref: { taskId: 't1' }, userId: 7 });
   expect(v.a).toBe(1);
   expect(mockLogUsage).toHaveBeenCalledWith({ taskId: 't1' }, 7, 'repair', { input_tokens: 9 }, 42);
+  expect(mockRunClaude.mock.calls[0][1].taskId).toBe(42);
+});
+
+test('repairYamlPayload：任務補救也帶 DB taskId，受同一張任務的花費上限約束', async () => {
+  mockRunClaude.mockResolvedValue({ text: '<result>answer: fixed</result>' });
+  await repairYamlPayload('answer: [', 'bad YAML', { ref: { taskId: 't1' }, userId: 7 });
+  expect(mockRunClaude.mock.calls[0][1].taskId).toBe(42);
+});
+
+test('格式補救查不到所屬任務時不開跑 AI，避免失去預算歸屬', async () => {
+  mockQuery.mockResolvedValue({ rows: [] });
+  await expect(parseAgentResult('壞', { parse: JSON.parse, ref: { taskId: 'missing' }, userId: 7 }))
+    .rejects.toThrow('找不到格式補救所屬任務');
+  expect(mockRunClaude).not.toHaveBeenCalled();
 });
 
 test('parseAgentResult：帶 ref 且補救失敗（非 abort）→ 落一筆 repair 失敗帳、回 null', async () => {

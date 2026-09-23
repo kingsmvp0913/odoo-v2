@@ -90,6 +90,12 @@ describe('classifyFailureWithAgent', () => {
     expect(runClaude).toHaveBeenCalled();
   });
 
+  test('任務部署失敗的 AI 分類仍受同張任務花費上限約束', async () => {
+    runClaude.mockResolvedValue({ text: '{"type":"env"}' });
+    await classifyFailureWithAgent('weird novel error xyz', { taskId: 'task_public', taskDbId: 42, userId: 7 });
+    expect(runClaude.mock.calls[0][1].taskId).toBe(42);
+  });
+
   test('unknown → agent 出錯 → 預設 env（丟人工，不退 coding 空轉）', async () => {
     runClaude.mockRejectedValue(new Error('agent down'));
     const r = await classifyFailureWithAgent('weird novel error xyz');
