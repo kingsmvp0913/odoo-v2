@@ -67,6 +67,25 @@ describe('誰能用', () => {
   });
 });
 
+describe('任務花費上限', () => {
+  test('公司管理員只改自己公司；一般使用者不能改，null 可停用', async () => {
+    expect((await request(app).put('/api/company/task-budget').set(as(plainToken)).send({ task_budget_usd: 12.5 })).status).toBe(403);
+    const saved = await request(app).put('/api/company/task-budget').set(as(caToken))
+      .send({ task_budget_usd: 12.5, company_id: coB });
+    expect(saved.status).toBe(200);
+    expect(Number((await one('SELECT task_budget_usd FROM companies WHERE id=$1', [coA])).task_budget_usd)).toBe(12.5);
+    expect((await one('SELECT task_budget_usd FROM companies WHERE id=$1', [coB])).task_budget_usd).toBeNull();
+    expect(Number((await request(app).get('/api/company/task-budget').set(as(caToken))).body.task_budget_usd)).toBe(12.5);
+    expect((await request(app).put('/api/company/task-budget').set(as(caToken)).send({ task_budget_usd: null })).status).toBe(200);
+  });
+
+  test('不接受零、負數、文字或超過美分精度的上限', async () => {
+    for (const task_budget_usd of [0, -1, '5', 1.234]) {
+      expect((await request(app).put('/api/company/task-budget').set(as(caToken)).send({ task_budget_usd })).status).toBe(400);
+    }
+  });
+});
+
 describe('範圍', () => {
   test('只列得到自己公司的人', async () => {
     const res = await request(app).get('/api/company/users').set(as(caToken));

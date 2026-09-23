@@ -18,8 +18,8 @@ async function logTokenUsage(ref, userId, agentType, usage, durationMs, status =
       `INSERT INTO token_usage
          (task_id, project_id, chat_id, user_id, agent_type, model, provider,
           input_tokens, output_tokens, cache_read_tokens, cache_create_tokens,
-          duration_ms, status, source, resumed, error_message)
-       VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,'server',$14,$15)`,
+          duration_ms, status, source, resumed, error_message, cost_usd)
+       VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,'server',$14,$15,$16)`,
       [
         ref.taskId    || null,
         ref.projectId || null,
@@ -38,7 +38,8 @@ async function logTokenUsage(ref, userId, agentType, usage, durationMs, status =
         durationMs || null,
         status,
         resumed,
-        errorMessage ? String(errorMessage).slice(0, ERROR_MESSAGE_MAX) : null
+        errorMessage ? String(errorMessage).slice(0, ERROR_MESSAGE_MAX) : null,
+        Number.isFinite(u.total_cost_usd) && u.total_cost_usd >= 0 ? u.total_cost_usd : null
       ]
     );
   } catch (err) {
@@ -51,8 +52,10 @@ async function logTokenUsage(ref, userId, agentType, usage, durationMs, status =
 // fix-verify／chat 相關），連 task_events 都沒有對應紀錄，訊息丟掉就只剩 duration 可以反推成因。
 // resumed：只有「續接失敗、接著降級 fresh」那一列傳 true（見 with-resume.js）；其餘失敗路徑不傳，照舊 NULL。
 function logFailedUsage(ref, userId, agentType, err, resumed = null) {
+  // 開跑前就被花費上限擋下，沒有發生 AI 呼叫；不可虛增用量報表的失敗次數。
+  if (err?.code === 'TASK_BUDGET_EXCEEDED') return Promise.resolve();
   return logTokenUsage(
-    ref, userId, agentType, null,
+    ref, userId, agentType, err?.usage || null,
     err?.durationMs || null,
     err?.claudeStatus || 'error',
     resumed,

@@ -116,6 +116,7 @@ async function prepareSandboxRun({ claudeArgs, opts = {}, profile, projectId }, 
     sandboxMcpConfigPath,
     canRun: tok.canRun, issueRunToken: tok.issueRunToken, revokeRun: tok.revokeRun,
     resolveHomeBucket: (...a) => require('../lib/agent-home').resolveHomeBucket(...a),
+    remainingTaskBudget: (...a) => require('../lib/task-budget').remainingTaskBudget(...a),
     mkdirSync: fs.mkdirSync, execFile,
     getuid: () => process.getuid(), getgid: () => process.getgid(),
     ...deps,
@@ -123,6 +124,14 @@ async function prepareSandboxRun({ claudeArgs, opts = {}, profile, projectId }, 
   const scope = runScope(profile, projectId);
   const scopeProjectId = scope.startsWith('project-') ? projectId : null;
   if (!(await d.canRun(scope, opts.userId ?? null))) throw new Error(`此次 AI 執行未獲准（scope=${scope}）`);
+
+  // 每一次任務 AI 執行都重算剩餘額度；CLI 的上限只管本次，跨關累計由 token_usage 把關。
+  const remaining = opts.taskId != null ? await d.remainingTaskBudget(opts.taskId) : null;
+  const cents = remaining == null ? null : Math.floor(remaining * 10000) / 10000;
+  if (remaining != null && cents <= 0) {
+    throw Object.assign(new Error('這張任務的剩餘花費額度不足，請公司管理員提高上限後再按繼續'), { code: 'TASK_BUDGET_EXCEEDED' });
+  }
+  const budgetArgs = cents == null ? claudeArgs : [...claudeArgs, '--max-budget-usd', cents.toFixed(4)];
 
   const infra = await d.ensureAgentInfra();
   const callerEnv = opts.env || {};
@@ -186,7 +195,7 @@ async function prepareSandboxRun({ claudeArgs, opts = {}, profile, projectId }, 
     const built = buildAgentRunArgs({
       instanceId: infra.instanceId, runId, scope, image: infra.image, network: infra.network,
       user: `${d.getuid()}:${d.getgid()}`, mounts, workdir, home, env, limits: d.getSandboxLimits(),
-      command: ['claude', ...replaceArg(claudeArgs, '--mcp-config', d.sandboxMcpConfigPath(opts.agentType))],
+      command: ['claude', ...replaceArg(budgetArgs, '--mcp-config', d.sandboxMcpConfigPath(opts.agentType))],
     });
     const bounds = { ...RELEASE_BOUNDS, ...(d.releaseBounds || {}) };
     const name = built.containerName;

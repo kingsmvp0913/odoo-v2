@@ -15,6 +15,7 @@ const { encrypt } = require('./lib/crypto');
 const { buildGitEnvFromPat } = require('./lib/git-identity');
 const { listRemoteBranchesByUrl } = require('./pipeline/git');
 const { abortCompanyTasks } = require('./pipeline/runner');
+const { validTaskBudgetUsd } = require('./lib/task-budget');
 
 const auth = [verifyToken, requirePlatformAdmin];
 
@@ -25,7 +26,7 @@ const auth = [verifyToken, requirePlatformAdmin];
 // ——這種子查詢不引用外層的 c，不算相關子查詢，兩邊都繞開了。
 const listSql = `
   SELECT c.id, c.name, c.is_active, c.is_internal, c.active_from, c.active_until,
-         c.features, c.git_login, c.git_name, c.git_email,
+         c.features, c.git_login, c.git_name, c.git_email, c.task_budget_usd,
          (c.git_pat_enc IS NOT NULL) AS has_git_pat,
          -- 只回「有沒有」，永遠不回密文本身——與 has_git_pat 同一個理由。
          (c.anthropic_key_enc IS NOT NULL AND c.anthropic_key_enc <> '') AS has_anthropic_key,
@@ -108,6 +109,21 @@ function registerRoutes(app) {
       if (err.code === '23505') return res.status(409).json({ error: '公司名稱已存在' });
       res.status(500).json({ error: err.message });
     }
+  });
+
+  app.put('/api/admin/companies/:id/task-budget', auth, async (req, res) => {
+    const amount = req.body?.task_budget_usd;
+    if (!validTaskBudgetUsd(amount)) return res.status(400).json({ error: '任務花費上限須為正數美元金額（最多小數兩位），或 null 表示停用' });
+    try {
+      const { rows: company } = await query('SELECT is_internal FROM companies WHERE id=$1', [req.params.id]);
+      if (!company.length) return res.status(404).json({ error: '找不到這家公司' });
+      if (company[0].is_internal) return res.status(400).json({ error: '內部公司使用平台認證，不設定客戶任務上限' });
+      const { rows } = await query(
+        'UPDATE companies SET task_budget_usd=$2, updated_at=NOW() WHERE id=$1 RETURNING task_budget_usd',
+        [req.params.id, amount]
+      );
+      res.json({ task_budget_usd: rows[0].task_budget_usd });
+    } catch (err) { res.status(500).json({ error: err.message }); }
   });
 
   app.get('/api/admin/companies/:id/projects', auth, async (req, res) => {

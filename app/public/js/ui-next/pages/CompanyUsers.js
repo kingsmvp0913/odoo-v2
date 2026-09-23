@@ -22,6 +22,9 @@
         newUser: { username: "", password: "", display_name: "", role: "user" },
         savingUser: false,
         addUserOpen: false,
+        taskBudgetInput: "",
+        internalCompany: false,
+        savingBudget: false,
       };
     },
     async created() { await this.loadUsers(); },
@@ -31,12 +34,28 @@
         this.loadError = "";
         try {
           // 不帶任何公司參數：後端一律從 req.actor 取自己的公司，帶了也不算數（規格重點）。
-          this.users = await Api.get("company/users");
+          const [users, budget] = await Promise.all([Api.get("company/users"), Api.get("company/task-budget")]);
+          this.users = users;
+          this.taskBudgetInput = budget.task_budget_usd == null ? "" : String(budget.task_budget_usd);
+          this.internalCompany = !!budget.is_internal;
         } catch (e) {
           this.loadError = e.message || "無法載入帳號列表";
         } finally {
           this.loading = false;
         }
+      },
+      async saveTaskBudget() {
+        const amount = String(this.taskBudgetInput).trim() === "" ? null : Number(this.taskBudgetInput);
+        if (amount !== null && (!Number.isFinite(amount) || amount < 0.01 || Math.abs(amount * 100 - Math.round(amount * 100)) >= 1e-8)) {
+          return showToast("請輸入正數美元金額，最多小數兩位；留空表示不設定上限", "error");
+        }
+        this.savingBudget = true;
+        try {
+          const result = await Api.put("company/task-budget", { task_budget_usd: amount });
+          this.taskBudgetInput = result.task_budget_usd == null ? "" : String(result.task_budget_usd);
+          showToast("已儲存任務花費上限", "success");
+        } catch (e) { showToast(e.message || "儲存任務花費上限失敗", "error"); }
+        finally { this.savingBudget = false; }
       },
       async addUser() {
         if (!this.newUser.username || !this.newUser.password) return showToast("請填寫帳號和密碼", "error");
@@ -100,7 +119,17 @@
 
         <p v-if="loadError" class="ui-next-error-text">{{ loadError }}</p>
 
-        <div v-else class="settings-section">
+        <div v-if="!loading && !loadError && !internalCompany" class="settings-section">
+          <h2 class="section-title">任務花費上限</h2>
+          <p class="ui-next-field-note">每張任務的美元上限；留空表示暫不啟用。已達上限的任務會停下來，調高後可按繼續。</p>
+          <div class="field-item field-item-narrow">
+            <label class="field-label" for="company-task-budget">每張任務上限（USD）</label>
+            <input id="company-task-budget" v-model="taskBudgetInput" type="number" min="0.01" step="0.01" class="field-input" placeholder="尚未設定" />
+          </div>
+          <div class="ui-next-panel-actions"><button class="btn btn-primary btn-sm" :disabled="savingBudget" @click="saveTaskBudget">{{ savingBudget ? '儲存中…' : '儲存上限' }}</button></div>
+        </div>
+
+        <div v-if="!loadError" class="settings-section">
           <h2 class="section-title">帳號列表（{{ users.length }}）</h2>
           <div class="table-wrap table-cards-sm">
             <table class="data-table">

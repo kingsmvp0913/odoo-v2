@@ -43,7 +43,7 @@ function costSql(prefix = '') {
          WHEN LOWER(COALESCE(${p}model,'')) LIKE '%fable%' THEN ${RATES.claude.fable}
          ELSE ${RATES.claude._default}
        END)`;
-  return { weighted, rate, cost: `(${rate} * ${weighted} / 1000000.0)` };
+  return { weighted, rate, cost: `COALESCE(${p}cost_usd, ${rate} * ${weighted} / 1000000.0)` };
 }
 
 module.exports = { costSql, RATES };

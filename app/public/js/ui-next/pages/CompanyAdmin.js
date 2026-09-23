@@ -45,6 +45,8 @@
         // 基本資料表單
         form: { name: "", is_active: true, active_from: "", active_until: "" },
         savingBasic: false,
+        taskBudgetInput: "",
+        savingBudget: false,
 
         // 功能開關表單——後端整包覆蓋，所以這裡永遠保存「全部功能」的完整狀態，
         // 不是只記被使用者動過的那一個（見檔頭第 3 點的姊妹坑：wholesale replace）。
@@ -132,6 +134,7 @@
           active_from: this.dateOnly(c.active_from),
           active_until: this.dateOnly(c.active_until),
         };
+        this.taskBudgetInput = c.task_budget_usd == null ? "" : String(c.task_budget_usd);
         this.featureForm = {};
         for (const f of this.featureDefs) this.featureForm[f.key] = !!(c.features || {})[f.key];
         // pat 永遠留空：後端從不回傳密文，這裡也不假裝知道原文。
@@ -185,6 +188,20 @@
         } finally {
           this.savingBasic = false;
         }
+      },
+
+      async saveTaskBudget() {
+        const amount = String(this.taskBudgetInput).trim() === "" ? null : Number(this.taskBudgetInput);
+        if (amount !== null && (!Number.isFinite(amount) || amount < 0.01 || Math.abs(amount * 100 - Math.round(amount * 100)) >= 1e-8)) {
+          return showToast("請輸入正數美元金額，最多小數兩位；留空表示不設定上限", "error");
+        }
+        this.savingBudget = true;
+        try {
+          await Api.put(`admin/companies/${this.selected.id}/task-budget`, { task_budget_usd: amount });
+          await this.refreshSelectedFromList();
+          showToast("已儲存任務花費上限", "success");
+        } catch (e) { showToast(e.message || "儲存任務花費上限失敗", "error"); }
+        finally { this.savingBudget = false; }
       },
 
       async saveFeatures() {
@@ -447,6 +464,15 @@
             <div class="ui-next-panel-actions">
               <button class="btn btn-primary btn-sm" :disabled="savingBasic" @click="saveBasic">{{ savingBasic ? '儲存中…' : '儲存基本資料' }}</button>
             </div>
+            <template v-if="!selected.is_internal">
+              <h2>任務花費上限</h2>
+              <p class="ui-next-field-note">每張任務的美元上限；留空表示暫不啟用。超額任務會停下，調高後可繼續。</p>
+              <div class="field-item field-item-narrow">
+                <label class="field-label" for="admin-company-task-budget">每張任務上限（USD）</label>
+                <input id="admin-company-task-budget" v-model="taskBudgetInput" type="number" min="0.01" step="0.01" class="field-input" placeholder="尚未設定" />
+              </div>
+              <div class="ui-next-panel-actions"><button class="btn btn-primary btn-sm" :disabled="savingBudget" @click="saveTaskBudget">{{ savingBudget ? '儲存中…' : '儲存上限' }}</button></div>
+            </template>
           </section>
 
           <section v-show="tab==='features'" class="ui-next-panel">

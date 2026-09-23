@@ -121,6 +121,27 @@ test('analysis_running 未綁專案 → runTaskAnalysis 回 false → stopped', 
   expect(rows[0].blocker_content).toContain('專案');
 });
 
+test('客戶任務有花費上限但容器未全開 → 停止派工，不能走無預算限制的舊路徑', async () => {
+  const flag = require('../lib/agent-sandbox-flag');
+  const { runTaskAnalysis } = require('../pipeline/task-agent');
+  const { rows: [company] } = await dbModule.query(
+    "INSERT INTO companies (name, is_active, task_budget_usd) VALUES ('runner budget', true, 1) RETURNING id"
+  );
+  await dbModule.query('UPDATE users SET company_id=$1 WHERE id=$2', [company.id, userId]);
+  const taskId = await insertTask('analysis_running');
+  flag._setFlagStateForTesting({ mode: 'off' });
+  try {
+    await run();
+    const { rows: [task] } = await dbModule.query('SELECT status, blocker_content FROM tasks WHERE id=$1', [taskId]);
+    expect(task.status).toBe('stopped');
+    expect(task.blocker_content).toContain('全容器模式');
+    expect(runTaskAnalysis).not.toHaveBeenCalled();
+  } finally {
+    await dbModule.query('UPDATE users SET company_id=NULL WHERE id=$1', [userId]);
+    flag._setFlagStateForTesting({ mode: 'off' });
+  }
+});
+
 // --- 換關的時間軸紀錄（停在對話流的人看得到自己被叫到）---
 // 意圖：轉關原本只寫進「執行歷程」與狀態徽章，對話流上是空窗——尤其進入等人的關時最該當場看到。
 // 轉移邏輯散在 20 幾處 inline 賦值，所以驗的是 runner 兩個必經點各補一行，而不是某一關記得呼叫。

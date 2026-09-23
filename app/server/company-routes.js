@@ -9,6 +9,7 @@ const { query } = require('./db');
 const { verifyToken } = require('./auth');
 const { hashPassword } = require('./password');
 const { canManageCompanyUsers, ROLES } = require('./lib/tenant-access');
+const { validTaskBudgetUsd } = require('./lib/task-budget');
 
 // 公司管理員能指派的角色。刻意不含 admin——公司管理員能建平台管理員的話，
 // 等於任何一家客戶都能替自己開一個全平台的後門。
@@ -30,6 +31,31 @@ function myCompany(req, res) {
 }
 
 function registerRoutes(app) {
+  app.get('/api/company/task-budget', verifyToken, async (req, res) => {
+    const companyId = myCompany(req, res); if (!companyId) return;
+    try {
+      const { rows } = await query('SELECT task_budget_usd, is_internal FROM companies WHERE id=$1', [companyId]);
+      if (!rows.length) return res.status(404).json({ error: '找不到所屬公司' });
+      res.json({ task_budget_usd: rows[0].task_budget_usd, is_internal: rows[0].is_internal });
+    } catch (err) { res.status(500).json({ error: err.message }); }
+  });
+
+  app.put('/api/company/task-budget', verifyToken, async (req, res) => {
+    const companyId = myCompany(req, res); if (!companyId) return;
+    const amount = req.body?.task_budget_usd;
+    if (!validTaskBudgetUsd(amount)) return res.status(400).json({ error: '任務花費上限須為正數美元金額（最多小數兩位），或 null 表示停用' });
+    try {
+      const { rows: company } = await query('SELECT is_internal FROM companies WHERE id=$1', [companyId]);
+      if (!company.length) return res.status(404).json({ error: '找不到所屬公司' });
+      if (company[0].is_internal) return res.status(400).json({ error: '內部公司使用平台認證，不設定客戶任務上限' });
+      const { rows } = await query(
+        'UPDATE companies SET task_budget_usd=$2, updated_at=NOW() WHERE id=$1 RETURNING task_budget_usd',
+        [companyId, amount]
+      );
+      res.json({ task_budget_usd: rows[0].task_budget_usd });
+    } catch (err) { res.status(500).json({ error: err.message }); }
+  });
+
   app.get('/api/company/users', verifyToken, async (req, res) => {
     const companyId = myCompany(req, res); if (!companyId) return;
     try {

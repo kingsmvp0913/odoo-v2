@@ -20,6 +20,7 @@ function deps(over = {}) {
       // 階段 3 起憑證由 buildClaudeAuthEnv(userId) 決定（客戶公司用自己的 ANTHROPIC_API_KEY，
       // 其餘用平台訂閱）。這裡的替身回平台那把，與改動前的行為相同。
       buildClaudeAuthEnv: async () => ({ CLAUDE_CODE_OAUTH_TOKEN: 'oauth-x' }),
+      remainingTaskBudget: async () => null,
       getSandboxLimits: () => ({ memory: '4g', cpus: '2', pids: 512 }),
       resolveSandboxMounts: async (ctx) => ({ mounts: [], workdir: ctx.platformWorktree || ctx.home }),
       mkdirSync: () => {},
@@ -69,6 +70,15 @@ describe('prepareSandboxRun', () => {
     expect(run.childEnv.CLAUDE_CODE_OAUTH_TOKEN).toBe('oauth-x');
     await run.release();
     expect(rt.verifyRunToken(run.childEnv.AIDEV_AI_TOKEN).ok).toBe(false);
+  });
+
+  test('任務有上限時每次執行把剩餘美元額度傳給 Claude CLI；已超額不開容器', async () => {
+    const { d } = deps({ remainingTaskBudget: async () => 1.23456 });
+    const run = await sr.prepareSandboxRun({ claudeArgs: ARGS, opts: { agentType: 'qa', taskId: 70 }, profile: profileFor('qa'), projectId: 7 }, d);
+    expect(run.argv[run.argv.indexOf('--max-budget-usd') + 1]).toBe('1.2345');
+    await run.release();
+    const blocked = deps({ remainingTaskBudget: async () => { throw Object.assign(new Error('已達花費上限'), { code: 'TASK_BUDGET_EXCEEDED' }); } });
+    await expect(sr.prepareSandboxRun({ claudeArgs: ARGS, opts: { agentType: 'qa', taskId: 70 }, profile: profileFor('qa'), projectId: 7 }, blocked.d)).rejects.toThrow(/已達花費上限/);
   });
 
   test('kill → docker kill <容器名>', async () => {

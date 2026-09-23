@@ -40,7 +40,7 @@ async function withResume(opts) {
       return { ...result, resumed: true };
     } catch (err) {
       // 手動暫停：狀態原地不動、session 留著供解除後續用（比照 qa-agent.js:110）
-      if (err && err.aborted) throw err;
+      if (err && (err.aborted || err.code === 'TASK_BUDGET_EXCEEDED')) throw err;
       await Promise.resolve(clearSession()).catch(() => {});
       // 逾時不在同輪重跑：同一份輸入再跑一次極可能再逾時，只是讓使用者多等一輪
       // （session 已清，下次進來自然是 fresh；比照 qa-agent.js:114）

@@ -372,7 +372,7 @@ async function runTaskAnalysis(taskId, userId, signal) {
         resumed = true;
         await query('UPDATE tasks SET analysis_resume_count = COALESCE(analysis_resume_count,0) + 1 WHERE id=$1', [taskId]).catch(() => {});
       } catch (err) {
-        if (err.aborted) throw err;  // 手動暫停：交下方既有 catch 原樣處理，session 留著解除後續用
+        if (err.aborted || err.code === 'TASK_BUDGET_EXCEEDED') throw err;  // 未開跑：保留 session，不降級 fresh
         // session 遺失／CLI 壞掉：清掉 stale session 並歸零計數，下次進來自然 fresh 重讀。
         // 逾時是例外——那條 session 是活的（只是這一輪沒做完），清掉等於逼下一輪從零重讀整包 code、
         // 再逾時一次。留著交下方 catch 依 err.sessionId 續存並累加計數。
@@ -618,7 +618,7 @@ async function writeSpecTour(taskId, userId, signal, branchName) {
     // resume 專屬的降級：session 被 CLI 回收／失效時，fresh 仍然寫得出 tour（只是要自己重讀模組）。
     // 排除 aborted（使用者暫停，狀態原地不動）與 timeout（同一份輸入再跑一次極可能再逾時，只是讓
     // 使用者多等一輪；比照 with-resume.js:39-44）。沒有 session 可接時不重跑——那就是純失敗。
-    if (!task.analysis_session_id || err.aborted || err.claudeStatus === 'timeout') {
+    if (!task.analysis_session_id || err.aborted || err.code === 'TASK_BUDGET_EXCEEDED' || err.claudeStatus === 'timeout') {
       throw err;   // 外層照舊寫「產出失敗」的 task_logs 並讓任務推進
     }
     await query(

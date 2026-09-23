@@ -266,7 +266,7 @@ function runClaude(prompt, opts = {}) {
     // sessionId 一併帶出（init 事件早在第一則就到手，失敗時必定已有值）：逾時的那一輪已經把整包 code
     // 讀進 session，呼叫端存下來就能 --resume 續跑；不帶的話重跑從零讀起、極可能再逾時一次
     // （task 180 分析關 600s 的探索全數作廢即此）。
-    const fail = (err, status) => Object.assign(err, { claudeStatus: status, durationMs: Date.now() - startedAt, sessionId });
+    const fail = (err, status) => Object.assign(err, { claudeStatus: status, durationMs: Date.now() - startedAt, sessionId, usage });
     // CLI 掛死時若無 timeout，任務會永久卡在 *_running、merge 鎖永不釋放，只能重啟 server（健檢 U9）
     timer = setTimeout(() => {
       killChild();
@@ -337,6 +337,9 @@ function runClaude(prompt, opts = {}) {
           if (ev.type === 'result') {
             resultText = ev.result      || resultText;
             usage      = ev.usage       || null;
+            if (Number.isFinite(ev.total_cost_usd) && ev.total_cost_usd >= 0) {
+              usage = { ...(usage || {}), total_cost_usd: ev.total_cost_usd };
+            }
             durationMs = ev.duration_ms || null;
             // is_error／subtype!=='success' 才算失敗訊息：成功那則也走同一個 type，
             // 無條件收下會把正常產出當成錯誤字串塞進 blocker。
@@ -438,7 +441,7 @@ function runClaude(prompt, opts = {}) {
         // run.attach：release 要等這個 docker run CLI 退出，才判斷得了容器是否真的不會再跑（sandbox-run.js）
         attachChild(run.attach(spawn('docker', run.argv, { stdio: ['pipe', 'pipe', 'pipe'], env: run.childEnv })));
       })
-      .catch(err => finish(() => reject(fail(err, 'error'))));
+      .catch(err => finish(() => reject(fail(err, err.code === 'TASK_BUDGET_EXCEEDED' ? 'budget' : 'error'))));
   });
 }
 

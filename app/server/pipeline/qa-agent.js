@@ -180,7 +180,7 @@ async function runQaAgent(taskId, userId, signal) {
         usedResume = true;
         await query('UPDATE tasks SET qa_resume_count = qa_resume_count + 1, qa_session_id = COALESCE($2, qa_session_id) WHERE id=$1', [taskId, callResult.sessionId]).catch(() => {});
       } catch (err) {
-        if (err.aborted) throw err; // 手動暫停：交外層原樣處理，session 留著解除後續用
+        if (err.aborted || err.code === 'TASK_BUDGET_EXCEEDED') throw err; // 暫停或花費上限：保留 session，不降級 fresh
         // timeout：清掉 stale session（並歸零 count，比照 session-lost 分支）再 rethrow，讓下次解鎖
         // 降級為 fresh 讀新脈絡；否則人工每次解鎖都拿同一 stale session 重演同一 timeout、counter 也永不推進
         if (err.claudeStatus === 'timeout') {

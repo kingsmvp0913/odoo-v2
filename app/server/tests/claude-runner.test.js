@@ -195,6 +195,22 @@ test('runClaude：從 init 事件抓到 session_id 並回傳', async () => {
   expect(r.sessionId).toBe('sess-abc');
 });
 
+test('runClaude：result 的 total_cost_usd 跟用量一起回傳供實際金額記帳', async () => {
+  const { spawn } = require('child_process');
+  const { EventEmitter } = require('events');
+  const child = new EventEmitter();
+  child.stdout = new EventEmitter();
+  child.stderr = new EventEmitter();
+  child.stdin = { write: () => {}, end: () => {}, on: () => {} };
+  spawn.mockReturnValueOnce(child);
+
+  const { runClaude } = require('../pipeline/claude-runner');
+  const p = runClaude('p', {});
+  child.stdout.emit('data', JSON.stringify({ type: 'result', result: 'done', usage: { input_tokens: 1 }, total_cost_usd: 0.1234 }) + '\n');
+  child.emit('close', 0);
+  expect((await p).usage.total_cost_usd).toBe(0.1234);
+});
+
 // 用量顯示的救命索：usage endpoint 被 429 擋住時，串流裡的 rate_limit_event 是唯一還會更新、
 // 且量的正是「跑任務這把憑證」的來源。漏接它 = 限流期間完全沒有任何新鮮的用量訊號。
 test('runClaude：攔下 rate_limit_event 並記進用量狀態', async () => {

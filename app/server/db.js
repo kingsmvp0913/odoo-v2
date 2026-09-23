@@ -367,6 +367,7 @@ async function migrate() {
       output_tokens        INTEGER NOT NULL DEFAULT 0,
       cache_read_tokens    INTEGER NOT NULL DEFAULT 0,
       cache_create_tokens  INTEGER NOT NULL DEFAULT 0,
+      cost_usd             NUMERIC,
       duration_ms          INTEGER,
       source               TEXT NOT NULL DEFAULT 'server' CHECK (source IN ('server','ps1')),
       resumed              BOOLEAN,
@@ -810,6 +811,7 @@ async function migrate() {
       git_login    TEXT,
       git_name     TEXT,
       git_email    TEXT,
+      task_budget_usd NUMERIC,
       created_at   TIMESTAMPTZ DEFAULT NOW(),
       updated_at   TIMESTAMPTZ DEFAULT NOW()
     )`,
@@ -1056,6 +1058,8 @@ async function migrate() {
     // 的形狀反推成因（2026-09-08 的 9 筆 codex 續接失敗、feedback_triage 首日 5 筆 error）。
     // 成功列一律 NULL；寫入端截斷長度，避免整份 stack／輸出塞爆這張高頻寫入的表。
     { table: 'token_usage', col: 'error_message', sql: 'ALTER TABLE token_usage ADD COLUMN error_message TEXT' },
+    // Claude result 回報的實際美元成本；NULL 表示舊資料或沒有 result，查詢時才退回 token 估算。
+    { table: 'token_usage', col: 'cost_usd', sql: 'ALTER TABLE token_usage ADD COLUMN cost_usd NUMERIC' },
     { table: 'tasks', col: 'stage_label',          sql: 'ALTER TABLE tasks ADD COLUMN stage_label TEXT' },
     { table: 'tasks', col: 'classification_label', sql: 'ALTER TABLE tasks ADD COLUMN classification_label TEXT' },
     { table: 'tasks', col: 'has_attachment',       sql: 'ALTER TABLE tasks ADD COLUMN has_attachment BOOLEAN NOT NULL DEFAULT false' },
@@ -1270,6 +1274,8 @@ async function migrate() {
     // 不可以悄悄退回平台那把共用訂閱——那等於廠商替客戶付錢，而 companies.is_internal
     // 的註解已經寫明那違反 Anthropic 條款。內部公司不需要這一欄（它本來就用平台訂閱）。
     { table: 'companies', col: 'anthropic_key_enc', sql: 'ALTER TABLE companies ADD COLUMN anthropic_key_enc TEXT' },
+    // 預設 NULL：美元上限尚待依歷史任務 p90/p99 裁決；不得擅自給客戶一個未核准數字。
+    { table: 'companies', col: 'task_budget_usd', sql: 'ALTER TABLE companies ADD COLUMN task_budget_usd NUMERIC' },
     // systemd 目標的 odoo 執行檔絕對路徑。NULL＝退回裸名 `odoo-bin`（PATH 上找得到的機器行為不變）。
     // ⚠ 慈雲那台就是 PATH 上沒有：升級指令一送出去就 `sudo: odoo-bin: command not found`、exit 1、
     // 整批回滾，而部署 log 只有那一行——看起來像客戶的模組壞了，實際上碼連被讀到都沒有。

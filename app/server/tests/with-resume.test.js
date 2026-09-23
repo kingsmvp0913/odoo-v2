@@ -89,6 +89,14 @@ test('手動暫停（err.aborted）→ 原樣拋出，且不得清 session', asy
   expect(runClaude).toHaveBeenCalledTimes(1);                   // 不降級重跑
 });
 
+test('花費上限在續接前擋下 → 不清 session、不降級 fresh 重跑', async () => {
+  runClaude.mockRejectedValue(Object.assign(new Error('已達花費上限'), { code: 'TASK_BUDGET_EXCEEDED' }));
+  const o = makeOpts({ getSession: jest.fn().mockResolvedValue({ sessionId: 's-1', promptVer: 'F1.R1' }) });
+  await expect(withResume(o)).rejects.toThrow('已達花費上限');
+  expect(o.clearSession).not.toHaveBeenCalled();
+  expect(runClaude).toHaveBeenCalledTimes(1);
+});
+
 test('retry timeout → 清 session 並拋出，不在同一輪重跑（避免連兩次逾時）', async () => {
   runClaude.mockRejectedValue(Object.assign(new Error('timeout'), { claudeStatus: 'timeout' }));
   const o = makeOpts({ getSession: jest.fn().mockResolvedValue({ sessionId: 's-1', promptVer: 'F1.R1' }) });

@@ -192,7 +192,7 @@ async function buildAgentSummary(agent, { windowDays = 30 } = {}) {
   // 成本用與 token-report 同一套加權（output=5×、cache_read=0.1×、cache_create=1.25× input），
   // 單價依 model 取（未知/空一律以 sonnet 計）。健檢原本完全看不到成本，於是 30 天最大單項支出
   // 的 agent 被判「表現正常」——成本是本平台最該被觀測的訊號，不能不在視野內。
-  const { weighted: WEIGHTED, rate: RATE } = costSql();
+  const { cost: COST } = costSql();
   const { rows: [tk] } = await query(
     // ⚠ calls／failed_calls 的口徑與 buildWindowSummary 的 per_stage 及正式報表三者必須一致：
     // aborted（按停止）與 interrupted（重啟／OOM）分子分母都排除。同一個檔案裡放兩份不同定義，
@@ -202,7 +202,7 @@ async function buildAgentSummary(agent, { windowDays = 30 } = {}) {
             COALESCE(SUM(output_tokens),0)::int AS output_tokens,
             COALESCE(SUM(cache_read_tokens),0)::int AS cache_read,
             COALESCE(SUM(cache_create_tokens),0)::int AS cache_create,
-            COALESCE(SUM(${RATE} * ${WEIGHTED} / 1000000.0),0) AS cost_usd,
+            COALESCE(SUM(${COST}),0) AS cost_usd,
             COALESCE(AVG(duration_ms),0)::int   AS avg_duration_ms,
             COALESCE(SUM(CASE WHEN COALESCE(status,'completed') NOT IN ('completed','aborted','interrupted') THEN 1 ELSE 0 END),0)::int AS failed_calls
        FROM token_usage
@@ -433,7 +433,7 @@ async function buildWindowSummary(sinceAt, untilAt = null) {
   const until = untilAt ? new Date(untilAt).toISOString() : null;
   const upTo = col => (until ? ` AND ${col} < $2` : '');
   const args = until ? [since, until] : [since];
-  const { weighted: WEIGHTED, rate: RATE } = costSql();
+  const { cost: COST } = costSql();
 
   const { rows: usage } = await query(
     `SELECT task_id, chat_id, agent_type, model, duration_ms, status, recorded_at,
@@ -441,7 +441,7 @@ async function buildWindowSummary(sinceAt, untilAt = null) {
        FROM token_usage WHERE recorded_at >= $1${upTo('recorded_at')} ORDER BY recorded_at, id`, args
   );
   const { rows: [cost] } = await query(
-    `SELECT COALESCE(SUM(${RATE} * ${WEIGHTED} / 1000000.0),0) AS cost_usd FROM token_usage WHERE recorded_at >= $1${upTo('recorded_at')}`,
+    `SELECT COALESCE(SUM(${COST}),0) AS cost_usd FROM token_usage WHERE recorded_at >= $1${upTo('recorded_at')}`,
     args
   );
 

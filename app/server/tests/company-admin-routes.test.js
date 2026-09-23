@@ -92,6 +92,16 @@ describe('建立公司', () => {
 });
 
 describe('修改公司', () => {
+  test('平台管理員可設定客戶任務上限，清單可讀；一般使用者不可設定', async () => {
+    const id = (await request(app).post('/api/admin/companies').set(as(adminToken)).send({ name: '上限客戶' })).body.id;
+    expect((await request(app).put(`/api/admin/companies/${id}/task-budget`).set(as(userToken)).send({ task_budget_usd: 10 })).status).toBe(403);
+    const saved = await request(app).put(`/api/admin/companies/${id}/task-budget`).set(as(adminToken)).send({ task_budget_usd: 10 });
+    expect(saved.status).toBe(200);
+    expect(Number(saved.body.task_budget_usd)).toBe(10);
+    const listed = await request(app).get('/api/admin/companies').set(as(adminToken));
+    expect(Number(listed.body.find(c => c.id === id).task_budget_usd)).toBe(10);
+  });
+
   test('改啟用與使用期間', async () => {
     const id = (await request(app).post('/api/admin/companies').set(as(adminToken)).send({ name: '戊客戶' })).body.id;
     const res = await request(app).put(`/api/admin/companies/${id}`).set(as(adminToken))
