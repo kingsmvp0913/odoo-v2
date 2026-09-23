@@ -1,0 +1,448 @@
+<title>odoo-v2 SaaS 化規格</title>
+<meta name="description" content="平台產品化五塊規格與總覽">
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=JetBrains+Mono:wght@400;600&family=Noto+Sans+TC:wght@400;500;700&family=Noto+Serif+TC:wght@600;700&display=swap">
+<style>
+  /* 配色取自平台 app.css 的既有 token（--bg / --surface / --border / --text / --primary / --warning），同一個產品家族 */
+  :root {
+    --ground: #f7f8fa;
+    --surface: #ffffff;
+    --rule: #e4e4e7;
+    --rule-strong: #d1d5db;
+    --ink: #111827;
+    --ink-2: #374151;
+    --muted: #6b7280;
+    --accent: #4f46e5;
+    --accent-soft: #eef2ff;
+    --code-bg: #f1f2f6;
+    --decide-ink: #9a3412;
+    --decide-bg: #fff4e5;
+    --decide-rule: #fdba74;
+    --rail-w: 264px;
+    --font-body: "Noto Sans TC", "PingFang TC", "Microsoft JhengHei", system-ui, sans-serif;
+    --font-display: "Noto Serif TC", "Songti TC", "PMingLiU", serif;
+    --font-mono: "JetBrains Mono", ui-monospace, "SFMono-Regular", Menlo, "Noto Sans TC", monospace;
+  }
+  @media (prefers-color-scheme: dark) {
+    :root:not([data-theme="light"]) {
+      --ground: #191919;
+      --surface: #202020;
+      --rule: #2e2e2e;
+      --rule-strong: #3d3d3d;
+      --ink: #e8e8e8;
+      --ink-2: #c4c4c4;
+      --muted: #9a9a9a;
+      --accent: #a5b4fc;
+      --accent-soft: #25263a;
+      --code-bg: #2a2a2a;
+      --decide-ink: #fdba74;
+      --decide-bg: #2b2118;
+      --decide-rule: #7c4a1e;
+    }
+  }
+  :root[data-theme="dark"] {
+    --ground: #191919;
+    --surface: #202020;
+    --rule: #2e2e2e;
+    --rule-strong: #3d3d3d;
+    --ink: #e8e8e8;
+    --ink-2: #c4c4c4;
+    --muted: #9a9a9a;
+    --accent: #a5b4fc;
+    --accent-soft: #25263a;
+    --code-bg: #2a2a2a;
+    --decide-ink: #fdba74;
+    --decide-bg: #2b2118;
+    --decide-rule: #7c4a1e;
+  }
+
+  * { box-sizing: border-box; }
+  html { scroll-padding-top: 16px; }
+  @media (prefers-reduced-motion: no-preference) { html { scroll-behavior: smooth; } }
+  body {
+    margin: 0;
+    background: var(--ground);
+    color: var(--ink);
+    font-family: var(--font-body);
+    font-size: 16px;
+    line-height: 1.8;
+    -webkit-font-smoothing: antialiased;
+  }
+  a { color: var(--accent); text-underline-offset: 3px; }
+  :focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; border-radius: 4px; }
+
+  .shell {
+    display: grid;
+    grid-template-columns: var(--rail-w) minmax(0, 1fr);
+    min-height: 100vh;
+  }
+
+  /* ── 左側：文件清單 ── */
+  .rail {
+    position: sticky;
+    top: 0;
+    align-self: start;
+    height: 100vh;
+    overflow-y: auto;
+    border-right: 1px solid var(--rule);
+    background: var(--surface);
+    padding: 28px 18px 32px;
+    display: flex;
+    flex-direction: column;
+    gap: 24px;
+  }
+  .brand { display: flex; flex-direction: column; gap: 2px; padding: 0 8px; }
+  .brand-name { font-family: var(--font-display); font-weight: 700; font-size: 19px; line-height: 1.35; }
+  .brand-sub { font-size: 12.5px; color: var(--muted); }
+
+  .rail-label {
+    font-size: 11.5px;
+    letter-spacing: 0.08em;
+    color: var(--muted);
+    padding: 0 8px;
+    margin: 0 0 6px;
+  }
+  .doc-list { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; gap: 2px; }
+  .doc-link {
+    display: grid;
+    grid-template-columns: 26px 1fr auto;
+    align-items: baseline;
+    gap: 0 8px;
+    padding: 8px;
+    border-radius: 8px;
+    color: var(--ink-2);
+    text-decoration: none;
+    border: 1px solid transparent;
+  }
+  .doc-link:hover { background: var(--ground); }
+  .doc-link[aria-current="page"] { background: var(--accent-soft); color: var(--ink); border-color: var(--rule); }
+  .doc-num {
+    font-family: var(--font-mono);
+    font-size: 13px;
+    font-weight: 600;
+    color: var(--accent);
+    text-align: center;
+  }
+  .doc-title { font-size: 14.5px; font-weight: 500; line-height: 1.4; }
+  .doc-deps { grid-column: 2 / 3; font-size: 12px; color: var(--muted); line-height: 1.5; }
+  .doc-count {
+    grid-row: 1 / 3;
+    grid-column: 3;
+    align-self: center;
+    font-size: 11.5px;
+    font-variant-numeric: tabular-nums;
+    color: var(--decide-ink);
+    background: var(--decide-bg);
+    border: 1px solid var(--decide-rule);
+    border-radius: 999px;
+    padding: 0 7px;
+    line-height: 1.7;
+    white-space: nowrap;
+  }
+
+  .toc { list-style: none; margin: 0; padding: 0 0 0 8px; border-left: 1px solid var(--rule); display: flex; flex-direction: column; }
+  .toc a {
+    display: block;
+    padding: 4px 10px;
+    font-size: 13px;
+    line-height: 1.5;
+    color: var(--muted);
+    text-decoration: none;
+  }
+  .toc a:hover { color: var(--ink); }
+  .toc a.is-decision { color: var(--decide-ink); font-weight: 500; }
+
+  .rail-foot { margin-top: auto; font-size: 12px; color: var(--muted); padding: 0 8px; line-height: 1.6; }
+  .rail-foot code { font-family: var(--font-mono); font-size: 11.5px; }
+
+  /* ── 右側：閱讀欄 ── */
+  main { padding: 48px 56px 96px; }
+  .doc { max-width: 780px; margin: 0 auto; }
+
+  .doc h1 {
+    font-family: var(--font-display);
+    font-weight: 700;
+    font-size: 30px;
+    line-height: 1.4;
+    margin: 0 0 12px;
+    text-wrap: balance;
+  }
+  .doc h1 + p {
+    font-size: 13.5px;
+    color: var(--muted);
+    line-height: 1.75;
+    margin: 0 0 8px;
+    padding: 12px 16px;
+    background: var(--surface);
+    border: 1px solid var(--rule);
+    border-radius: 8px;
+  }
+  .doc h2 {
+    font-size: 21px;
+    font-weight: 700;
+    line-height: 1.45;
+    margin: 48px 0 14px;
+    padding-top: 20px;
+    border-top: 1px solid var(--rule);
+    text-wrap: balance;
+  }
+  .doc h3 { font-size: 17px; font-weight: 700; margin: 30px 0 8px; line-height: 1.5; }
+  .doc h4 { font-size: 15px; font-weight: 700; margin: 24px 0 6px; color: var(--ink-2); }
+  .doc p { margin: 0 0 14px; }
+  .doc ul, .doc ol { margin: 0 0 16px; padding-left: 1.4em; }
+  .doc li { margin: 3px 0; }
+  .doc li > ul, .doc li > ol { margin: 4px 0; }
+  .doc strong { font-weight: 700; }
+  .doc hr { display: none; }
+
+  .doc :not(pre) > code {
+    font-family: var(--font-mono);
+    font-size: 0.86em;
+    background: var(--code-bg);
+    border-radius: 4px;
+    padding: 0.08em 0.36em;
+    overflow-wrap: anywhere;
+  }
+  .doc pre {
+    margin: 0 0 18px;
+    padding: 16px 18px;
+    background: var(--surface);
+    border: 1px solid var(--rule);
+    border-radius: 8px;
+    overflow-x: auto;
+    line-height: 1.6;
+  }
+  .doc pre code { font-family: var(--font-mono); font-size: 13px; white-space: pre; }
+
+  .table-wrap {
+    margin: 0 0 20px;
+    overflow-x: auto;
+    border: 1px solid var(--rule);
+    border-radius: 8px;
+    background: var(--surface);
+  }
+  .doc table { border-collapse: collapse; width: 100%; font-size: 14px; line-height: 1.65; }
+  .doc th, .doc td { text-align: left; vertical-align: top; padding: 9px 14px; border-bottom: 1px solid var(--rule); }
+  .doc th { font-size: 12.5px; font-weight: 700; color: var(--muted); letter-spacing: 0.04em; background: var(--ground); white-space: nowrap; }
+  .doc tbody tr:last-child td { border-bottom: 0; }
+  .doc td:first-child { font-variant-numeric: tabular-nums; }
+
+  /* 「待你決定」段落：語意色，和主色分開 */
+  .doc h2.is-decision { display: flex; flex-wrap: wrap; align-items: baseline; gap: 6px 12px; }
+  .doc h2.is-decision::after {
+    content: attr(data-count);
+    font-size: 12px;
+    font-weight: 500;
+    letter-spacing: 0.02em;
+    color: var(--decide-ink);
+    background: var(--decide-bg);
+    border: 1px solid var(--decide-rule);
+    border-radius: 999px;
+    padding: 0 10px;
+    line-height: 1.9;
+  }
+  .doc .decision-zone .table-wrap { border-color: var(--decide-rule); }
+  .doc .decision-zone th { background: var(--decide-bg); color: var(--decide-ink); }
+
+  .doc-foot {
+    max-width: 780px;
+    margin: 64px auto 0;
+    padding-top: 16px;
+    border-top: 1px solid var(--rule);
+    display: flex;
+    justify-content: space-between;
+    gap: 16px;
+    font-size: 14px;
+  }
+  .doc-foot a { text-decoration: none; display: flex; flex-direction: column; gap: 2px; }
+  .doc-foot small { color: var(--muted); font-size: 12px; }
+  .doc-foot .next { text-align: right; margin-left: auto; }
+
+  .loading { color: var(--muted); }
+
+  /* ── 窄螢幕：清單改成上方橫條 ── */
+  @media (max-width: 900px) {
+    .shell { grid-template-columns: minmax(0, 1fr); }
+    .rail {
+      position: sticky;
+      height: auto;
+      z-index: 2;
+      padding: 12px 12px 10px;
+      border-right: 0;
+      border-bottom: 1px solid var(--rule);
+      gap: 8px;
+    }
+    .brand, .rail-label, .toc-block, .rail-foot { display: none; }
+    .doc-list { flex-direction: row; overflow-x: auto; gap: 6px; }
+    .doc-link { grid-template-columns: auto auto; white-space: nowrap; padding: 6px 10px; }
+    .doc-deps, .doc-count { display: none; }
+    main { padding: 28px 18px 72px; }
+    .doc h1 { font-size: 25px; }
+  }
+</style>
+
+<div class="shell">
+  <nav class="rail" aria-label="規格文件">
+    <div class="brand">
+      <span class="brand-name">odoo-v2 SaaS 化規格</span>
+      <span class="brand-sub">2026-09-11 初稿・待審閱</span>
+    </div>
+    <div>
+      <p class="rail-label">文件（依施工順序）</p>
+      <ul class="doc-list" id="docList"></ul>
+    </div>
+    <div class="toc-block">
+      <p class="rail-label">本份目錄</p>
+      <ul class="toc" id="toc"></ul>
+    </div>
+    <p class="rail-foot">原始檔：<code>docs/superpowers/specs/</code>（未進版控）</p>
+  </nav>
+  <main>
+    <article class="doc" id="doc"><p class="loading">載入規格中…</p></article>
+    <nav class="doc-foot" id="docFoot" aria-label="上一份與下一份"></nav>
+  </main>
+</div>
+
+<script src="https://cdnjs.cloudflare.com/ajax/libs/marked/12.0.2/marked.min.js" integrity="sha384-/TQbtLCAerC3jgaim+N78RZSDYV7ryeoBCVqTuzRrFec2akfBkHS7ACQ3PQhvMVi" crossorigin="anonymous"></script>
+<script>
+  const DOCS = /*__DOCS__*/null;
+  const STORE_KEY = 'odoo-v2-saas-specs:last';
+
+  const docList = document.getElementById('docList');
+  const tocEl = document.getElementById('toc');
+  const docEl = document.getElementById('doc');
+  const footEl = document.getElementById('docFoot');
+
+  function countDecisions(md) {
+    // 算「待你決定」那一節底下的表格列數（到下一個 ## 為止）
+    const lines = md.split('\n');
+    let inZone = false, n = 0;
+    for (const line of lines) {
+      if (/^## /.test(line)) inZone = line.includes('待你決定');
+      // 已經裁決的列（含「已決」）不算待決
+      else if (inZone && /^\|/.test(line) && !/^\|\s*[-:|\s]+\|?\s*$/.test(line) && !line.includes('已決')) n++;
+    }
+    // 每張表的表頭列不算
+    const headers = md.split(/\n(?=## )/).filter(s => /^## .*待你決定/.test(s))
+      .map(s => (s.match(/\n\|[^\n]*\n\|\s*[-:|\s]+\|/g) || []).length)
+      .reduce((a, b) => a + b, 0);
+    return Math.max(0, n - headers);
+  }
+
+  function renderList(activeId) {
+    docList.innerHTML = '';
+    for (const d of DOCS) {
+      const li = document.createElement('li');
+      const a = document.createElement('a');
+      a.className = 'doc-link';
+      a.href = '#' + d.id;
+      if (d.id === activeId) a.setAttribute('aria-current', 'page');
+      const num = document.createElement('span');
+      num.className = 'doc-num';
+      num.textContent = d.num === '' ? '＊' : d.num;
+      const title = document.createElement('span');
+      title.className = 'doc-title';
+      title.textContent = d.label;
+      const deps = document.createElement('span');
+      deps.className = 'doc-deps';
+      deps.textContent = d.deps;
+      a.append(num, title);
+      const c = countDecisions(d.md);
+      if (c > 0) {
+        const badge = document.createElement('span');
+        badge.className = 'doc-count';
+        badge.textContent = c + ' 項待決';
+        a.append(badge);
+      }
+      a.append(deps);
+      li.append(a);
+      docList.append(li);
+    }
+  }
+
+  function renderDoc(id, anchor) {
+    const idx = Math.max(0, DOCS.findIndex(d => d.id === id));
+    const d = DOCS[idx];
+    renderList(d.id);
+    try { localStorage.setItem(STORE_KEY, d.id); } catch (e) { /* 無儲存空間也照常顯示 */ }
+
+    docEl.innerHTML = marked.parse(d.md, { gfm: true, breaks: true });
+
+    // 表格包一層可橫向捲動的容器
+    docEl.querySelectorAll('table').forEach(t => {
+      const wrap = document.createElement('div');
+      wrap.className = 'table-wrap';
+      t.parentNode.insertBefore(wrap, t);
+      wrap.append(t);
+    });
+
+    // 標題 id、目錄、「待你決定」標記
+    tocEl.innerHTML = '';
+    let zone = null;
+    const heads = docEl.querySelectorAll('h2, h3');
+    let h2i = 0, h3i = 0;
+    heads.forEach(h => {
+      if (h.tagName === 'H2') { h2i++; h3i = 0; h.id = d.id + '-s' + h2i; }
+      else { h3i++; h.id = d.id + '-s' + h2i + '-' + h3i; }
+    });
+    Array.from(docEl.children).forEach(node => {
+      if (node.tagName === 'H2') {
+        zone = node.textContent.includes('待你決定') ? node : null;
+        if (zone) {
+          node.classList.add('is-decision');
+          const c = countDecisions(d.md);
+          if (c > 0) node.dataset.count = c + ' 項等你決定';
+        }
+        const li = document.createElement('li');
+        const a = document.createElement('a');
+        a.href = '#' + d.id + '/' + node.id;
+        a.textContent = node.textContent;
+        if (zone) a.classList.add('is-decision');
+        li.append(a);
+        tocEl.append(li);
+      } else if (zone && node.classList && node.classList.contains('table-wrap')) {
+        node.parentNode.insertBefore(document.createElement('div'), node);
+        const holder = node.previousSibling;
+        holder.className = 'decision-zone';
+        holder.append(node);
+      }
+    });
+
+    // 上一份／下一份
+    footEl.innerHTML = '';
+    const prev = DOCS[idx - 1], next = DOCS[idx + 1];
+    if (prev) footEl.append(footLink(prev, '上一份', 'prev'));
+    if (next) footEl.append(footLink(next, '下一份', 'next'));
+
+    if (anchor) {
+      const target = document.getElementById(anchor);
+      if (target) { target.scrollIntoView(); return; }
+    }
+    window.scrollTo(0, 0);
+  }
+
+  function footLink(d, label, cls) {
+    const a = document.createElement('a');
+    a.href = '#' + d.id;
+    a.className = cls;
+    const s = document.createElement('small');
+    s.textContent = label;
+    const t = document.createElement('span');
+    t.textContent = (d.num === '' ? '' : d.num + '　') + d.label;
+    a.append(s, t);
+    return a;
+  }
+
+  function route() {
+    const raw = decodeURIComponent(location.hash.slice(1));
+    let [id, anchor] = raw.split('/');
+    if (!id) {
+      try { id = localStorage.getItem(STORE_KEY) || 'overview'; } catch (e) { id = 'overview'; }
+    }
+    renderDoc(id, anchor);
+  }
+
+  window.addEventListener('hashchange', route);
+  route();
+</script>
