@@ -12,14 +12,19 @@ const ERROR_MESSAGE_MAX = 2000;
 
 async function logTokenUsage(ref, userId, agentType, usage, durationMs, status = 'completed', resumed = null, errorMessage = null) {
   if (!usage && status === 'completed') return;
+  ref = ref || {};
   const u = usage || {};
   try {
+    // 記下執行當下的公司：之後帳號若換公司，舊花費仍只屬於原公司。
+    const { rows: [owner] } = userId
+      ? await query('SELECT company_id FROM users WHERE id=$1', [userId])
+      : { rows: [] };
     await query(
       `INSERT INTO token_usage
          (task_id, project_id, chat_id, user_id, agent_type, model, provider,
           input_tokens, output_tokens, cache_read_tokens, cache_create_tokens,
-          duration_ms, status, source, resumed, error_message, cost_usd)
-       VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,'server',$14,$15,$16)`,
+          duration_ms, status, source, resumed, error_message, cost_usd, company_id)
+       VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,'server',$14,$15,$16,$17)`,
       [
         ref.taskId    || null,
         ref.projectId || null,
@@ -39,7 +44,8 @@ async function logTokenUsage(ref, userId, agentType, usage, durationMs, status =
         status,
         resumed,
         errorMessage ? String(errorMessage).slice(0, ERROR_MESSAGE_MAX) : null,
-        Number.isFinite(u.total_cost_usd) && u.total_cost_usd >= 0 ? u.total_cost_usd : null
+        Number.isFinite(u.total_cost_usd) && u.total_cost_usd >= 0 ? u.total_cost_usd : null,
+        owner?.company_id || null
       ]
     );
   } catch (err) {

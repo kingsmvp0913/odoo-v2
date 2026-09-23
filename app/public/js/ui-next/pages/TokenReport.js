@@ -17,6 +17,8 @@
         loadError: "",
         report: null,
         projects: [],
+        companies: [],
+        isPlatformAdmin: false,
         labels: {},
         expanded: {},
         claudeUsage: null,
@@ -39,6 +41,7 @@
           end: "",
           project_id: "",
           task_id: "",
+          company_id: "",
           showAll: false,
         },
       };
@@ -191,16 +194,20 @@
       },
     },
     async created() {
-      const [projects, labels, claude, codex] = await Promise.all([
+      const me = await Api.get("auth/me").catch(() => ({}));
+      this.isPlatformAdmin = me.role === "admin";
+      const [projects, labels, claude, codex, companies] = await Promise.all([
         Api.get("projects").catch(() => []),
         Api.get("agents/labels").catch(() => ({})),
-        Api.get("claude-usage").catch(() => null),
-        Api.get("codex-usage").catch(() => null),
+        this.isPlatformAdmin ? Api.get("claude-usage").catch(() => null) : null,
+        this.isPlatformAdmin ? Api.get("codex-usage").catch(() => null) : null,
+        this.isPlatformAdmin ? Api.get("admin/companies").catch(() => []) : [],
       ]);
       this.projects = projects;
       this.labels = labels;
       this.claudeUsage = claude;
       this.codexUsage = codex;
+      this.companies = companies;
       await this.load();
     },
     beforeUnmount() { this.teardownDetailObserver(); this.teardownChartObserver(); },
@@ -339,7 +346,8 @@
           if (this.filters.project_id)
             p.set("project_id", this.filters.project_id);
           if (this.filters.task_id) p.set("task_id", this.filters.task_id);
-          if (this.filters.showAll) p.set("all", "true");
+          if (this.isPlatformAdmin && this.filters.company_id) p.set("company_id", this.filters.company_id);
+          if (this.isPlatformAdmin && this.filters.showAll) p.set("all", "true");
           this.report = await Api.get(`token-report?${p}`);
         } catch (error) {
           // 只發 toast 的話 toast 消失後畫面只剩篩選列，看起來像「這期間沒資料」
@@ -355,7 +363,7 @@
         <header class="ui-next-page-head">
 <div>
 <h1>用量報表</h1>
-<p>查看額度、成本與交付品質；篩選只影響下方分析資料。</p>
+<p>{{ isPlatformAdmin ? '查看額度、成本與交付品質；篩選只影響下方分析資料。' : '查看自家公司成員產生的 AI 用量、成本與交付品質。' }}</p>
 </div>
 </header>
         <div data-tour="tr-filters" class="ui-next-filterbar">
@@ -375,14 +383,18 @@
 <option v-for="project in projects" :key="project.id" :value="project.id">{{ project.name }}</option>
 </select>
 <input v-model="filters.task_id" placeholder="任務 ID">
-<label>
+<select v-if="isPlatformAdmin" v-model="filters.company_id" @change="load">
+<option value="">全部公司</option>
+<option v-for="company in companies" :key="company.id" :value="company.id">{{ company.name }}</option>
+</select>
+<label v-if="isPlatformAdmin && !filters.company_id">
 <input v-model="filters.showAll" type="checkbox" @change="load"> 全部使用者</label>
 <button class="ui-next-primary" @click="load" :disabled="loading">{{ loading ? '更新中…' : '更新報表' }}</button>
 </div>
         <div class="ui-next-page-tabs" role="tablist">
 <button v-for="item in tabs" :key="item.key" :data-tour="'tr-tab-' + item.key" type="button" role="tab" :aria-selected="tab===item.key ? 'true' : 'false'" @click="tab=item.key">{{ item.label }}</button>
 </div>
-        <div v-show="tab==='overview'" class="ui-next-quota-card">
+        <div v-if="isPlatformAdmin" v-show="tab==='overview'" class="ui-next-quota-card">
 <div class="ui-next-card-title">
 <div>
 <h2>目前額度</h2>

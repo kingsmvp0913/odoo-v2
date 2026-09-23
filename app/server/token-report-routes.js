@@ -5,11 +5,17 @@ const { costSql } = require('./lib/token-cost');
 function registerRoutes(app) {
   app.get('/api/token-report', verifyToken, async (req, res) => {
     try {
-      // Check admin role via DB (verifyToken only sets req.userId)
-      const { rows: [me] } = await query('SELECT role FROM users WHERE id=$1', [req.userId]);
+      // 公司範圍由 DB 的登入者身分決定，絕不信任客戶端傳來的 company_id。
+      const { rows: [me] } = await query('SELECT role, company_id FROM users WHERE id=$1', [req.userId]);
       const isAdmin = me?.role === 'admin';
-      if (!isAdmin) return res.status(403).json({ error: '用量報表僅管理員可見' });
+      const isCompanyAdmin = me?.role === 'company_admin' && me.company_id != null;
+      if (!isAdmin && !isCompanyAdmin) return res.status(403).json({ error: '用量報表僅管理員可見' });
       const showAll = req.query.all === 'true';
+      const requestedCompany = req.query.company_id;
+      if (isAdmin && requestedCompany && (!/^[1-9]\d*$/.test(String(requestedCompany)) || !Number.isSafeInteger(Number(requestedCompany)))) {
+        return res.status(400).json({ error: 'company_id 格式不正確' });
+      }
+      const companyId = isCompanyAdmin ? me.company_id : (requestedCompany ? Number(requestedCompany) : null);
 
       const now = new Date();
       const defaultStart = new Date(now);
@@ -27,7 +33,10 @@ function registerRoutes(app) {
       const baseConditions = ['tu.recorded_at >= $1', 'tu.recorded_at <= $2'];
       const baseParams = [start, end];
 
-      if (!showAll) {
+      if (companyId != null) {
+        baseConditions.push(`tu.company_id = $${baseParams.length + 1}`);
+        baseParams.push(companyId);
+      } else if (!showAll) {
         baseConditions.push(`tu.user_id = $${baseParams.length + 1}`);
         baseParams.push(req.userId);
       }
@@ -111,7 +120,10 @@ function registerRoutes(app) {
       // 不是生涯總數，拿來算彈跳率會嚴重低估。token_usage 每次呼叫一列且不可重置，才是可靠的重跑紀錄。
       const taskConditions = ["t.status = 'done'", 't.done_at >= $1', 't.done_at <= $2'];
       const taskParams = [start, end];
-      if (!showAll) {
+      if (companyId != null) {
+        taskConditions.push(`t.task_id IN (SELECT task_id FROM token_usage WHERE company_id = $${taskParams.length + 1})`);
+        taskParams.push(companyId);
+      } else if (!showAll) {
         taskConditions.push(`t.user_id = $${taskParams.length + 1}`);
         taskParams.push(req.userId);
       }

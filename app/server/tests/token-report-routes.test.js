@@ -19,7 +19,7 @@ jest.mock('../lib/codex-app-server', () => ({
 
 process.env.JWT_SECRET = 'test-token-report';
 
-let app, dbModule, adminToken, userToken, companyAdminToken, adminUserId, regularUserId;
+let app, dbModule, adminToken, userToken, companyAdminToken, adminUserId, regularUserId, companyId;
 
 beforeAll(async () => {
   const db = newDb();
@@ -57,6 +57,7 @@ beforeAll(async () => {
   const { rows: [coScope] } = await dbModule.query(
     "INSERT INTO companies (name, is_active) VALUES ('用量測試公司', true) RETURNING id"
   );
+  companyId = coScope.id;
   await dbModule.query(
     "INSERT INTO users (username, password_hash, display_name, role, company_id) VALUES ('ca_tr', $1, 'CA TR', 'company_admin', $2)",
     [hash, coScope.id]
@@ -122,6 +123,41 @@ test('GET /api/token-report → 一般使用者 403（含帶 ?all=true）', asyn
     .get('/api/token-report?all=true')
     .set('Authorization', `Bearer ${userToken}`);
   expect(res2.status).toBe(403);
+});
+
+test('公司管理員報表只看執行當下所屬公司，all/company_id/task_id 參數不能跨公司', async () => {
+  const { rows: [other] } = await dbModule.query(
+    "INSERT INTO companies (name, is_active) VALUES ('另一家公司', true) RETURNING id"
+  );
+  try {
+    await dbModule.query(
+      `INSERT INTO token_usage (task_id, user_id, company_id, agent_type, input_tokens, source)
+       VALUES ('company_own', $1, $2, 'coding', 101, 'server'),
+              ('company_other', $1, $3, 'coding', 202, 'server')`,
+      [regularUserId, companyId, other.id]
+    );
+    const own = await request(app).get(`/api/token-report?all=true&company_id=${other.id}`)
+      .set('Authorization', `Bearer ${companyAdminToken}`);
+    expect(own.status).toBe(200);
+    expect(own.body.tasks.map(t => t.task_id)).toEqual(['company_own']);
+    const hidden = await request(app).get('/api/token-report?task_id=company_other')
+      .set('Authorization', `Bearer ${companyAdminToken}`);
+    expect(hidden.status).toBe(200);
+    expect(hidden.body.summary.total_records).toBeUndefined();
+    expect(hidden.body.tasks).toEqual([]);
+    const platform = await request(app).get(`/api/token-report?company_id=${other.id}`)
+      .set('Authorization', `Bearer ${adminToken}`);
+    expect(platform.status).toBe(200);
+    expect(platform.body.tasks.map(t => t.task_id)).toEqual(['company_other']);
+  } finally {
+    await dbModule.query("DELETE FROM token_usage WHERE task_id IN ('company_own','company_other')");
+  }
+});
+
+test('平台管理員公司篩選拒絕不合法 ID', async () => {
+  const res = await request(app).get('/api/token-report?company_id=999999999999999999999999')
+    .set('Authorization', `Bearer ${adminToken}`);
+  expect(res.status).toBe(400);
 });
 
 test('GET /api/token-report → 200 for admin (own data only without ?all=true)', async () => {

@@ -368,6 +368,7 @@ async function migrate() {
       cache_read_tokens    INTEGER NOT NULL DEFAULT 0,
       cache_create_tokens  INTEGER NOT NULL DEFAULT 0,
       cost_usd             NUMERIC,
+      company_id           INTEGER,
       duration_ms          INTEGER,
       source               TEXT NOT NULL DEFAULT 'server' CHECK (source IN ('server','ps1')),
       resumed              BOOLEAN,
@@ -1060,6 +1061,7 @@ async function migrate() {
     { table: 'token_usage', col: 'error_message', sql: 'ALTER TABLE token_usage ADD COLUMN error_message TEXT' },
     // Claude result 回報的實際美元成本；NULL 表示舊資料或沒有 result，查詢時才退回 token 估算。
     { table: 'token_usage', col: 'cost_usd', sql: 'ALTER TABLE token_usage ADD COLUMN cost_usd NUMERIC' },
+    { table: 'token_usage', col: 'company_id', sql: 'ALTER TABLE token_usage ADD COLUMN company_id INTEGER' },
     { table: 'tasks', col: 'stage_label',          sql: 'ALTER TABLE tasks ADD COLUMN stage_label TEXT' },
     { table: 'tasks', col: 'classification_label', sql: 'ALTER TABLE tasks ADD COLUMN classification_label TEXT' },
     { table: 'tasks', col: 'has_attachment',       sql: 'ALTER TABLE tasks ADD COLUMN has_attachment BOOLEAN NOT NULL DEFAULT false' },

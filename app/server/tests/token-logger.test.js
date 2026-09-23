@@ -71,3 +71,30 @@ test('上限檢查擋下的執行沒有真正呼叫 AI，不新增用量列', as
   const { rows } = await dbModule.query("SELECT id FROM token_usage WHERE task_id='tk-budget-blocked'");
   expect(rows).toHaveLength(0);
 });
+
+test('用量記下執行當下公司；帳號日後換公司不會改變歷史歸屬', async () => {
+  const { rows: [first] } = await dbModule.query("INSERT INTO companies (name) VALUES ('成本原公司') RETURNING id");
+  const { rows: [second] } = await dbModule.query("INSERT INTO companies (name) VALUES ('成本新公司') RETURNING id");
+  const { rows: [user] } = await dbModule.query(
+    "INSERT INTO users (username, password_hash, display_name, role, company_id) VALUES ('tk-company-user', 'hash', 'TK Company User', 'user', $1) RETURNING id",
+    [first.id]
+  );
+  await logTokenUsage({ taskId: 'tk-company-before' }, user.id, 'coding', usage, 100);
+  await dbModule.query('UPDATE users SET company_id=$1 WHERE id=$2', [second.id, user.id]);
+  await logTokenUsage({ taskId: 'tk-company-after' }, user.id, 'coding', usage, 100);
+  const { rows } = await dbModule.query(
+    "SELECT task_id, company_id FROM token_usage WHERE task_id IN ('tk-company-before','tk-company-after') ORDER BY task_id"
+  );
+  expect(rows.map(r => [r.task_id, r.company_id])).toEqual([
+    ['tk-company-after', second.id], ['tk-company-before', first.id]
+  ]);
+});
+
+test('沒有任務 ref 的對話標題執行也要記帳', async () => {
+  const { rows: [user] } = await dbModule.query(
+    "INSERT INTO users (username, password_hash, display_name, role) VALUES ('tk-chat-title', 'hash', 'TK Chat', 'user') RETURNING id"
+  );
+  await logTokenUsage(null, user.id, 'chat-title', usage, 100);
+  const { rows } = await dbModule.query("SELECT agent_type, user_id FROM token_usage WHERE agent_type='chat-title'");
+  expect(rows).toEqual([expect.objectContaining({ agent_type: 'chat-title', user_id: user.id })]);
+});

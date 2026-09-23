@@ -174,7 +174,7 @@ const router = createRouter({
     {
       path: "/token-report",
       component: window.UiNextTokenReportView,
-      meta: { requiresAuth: true, requiresAdmin: true },
+      meta: { requiresAuth: true },
     },
     {
       path: "/settings",
@@ -337,9 +337,8 @@ router.beforeEach(async (to) => {
       return { path: "/login", query: { redirect: to.fullPath } };
     }
   }
-  // 公司帳號頁專屬條件（見上方 /company-users route 的註解，理由同 Task 3 的
-  // requiresInternal：只有一頁用得到的角色組合，不值得發明新 meta 旗標）。
-  if (to.path === "/company-users") {
+  // 公司帳號與用量報表都開給公司管理員；共用角色閘門，報表資料範圍另由後端強制限制。
+  if (to.path === "/company-users" || to.path === "/token-report") {
     try {
       const me = await Api.get("auth/me");
       if (me.role !== "company_admin" && me.role !== "admin") return "/forbidden";

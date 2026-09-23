@@ -61,7 +61,6 @@ describe('admin 專屬路由都掛了 requiresAdmin', () => {
 // 這種頁面每多一個都該有人明確想過「為什麼它是 admin only」。
 describe('非 /admin 前綴的 admin-only 頁面', () => {
   const ADMIN_ONLY_OUTSIDE = [
-    '/token-report',  // 用量報表含全平台成本，僅管理員可見
     // 公司管理 2026-09-22 從 /companies 搬到 /admin/companies，已落進上面那個
     // 「/admin 前綴自動推導」的 describe 裡；留在這張白名單會是第二份、而且是錯的定義。
     '/architecture',  // 架構圖（3b Task 1）：平台內部實作細節
@@ -74,6 +73,16 @@ describe('非 /admin 前綴的 admin-only 頁面', () => {
     expect(block).toBeDefined();
     expect(`${p}: ${/requiresAdmin:\s*true/.test(block.body)}`).toBe(`${p}: true`);
   });
+});
+
+test('用量報表開給公司管理員，但路由守衛仍拒絕一般使用者', () => {
+  const block = routeBlocks.find((r) => r.path === '/token-report');
+  expect(block).toBeDefined();
+  expect(block.body).toMatch(/requiresAuth:\s*true/);
+  expect(block.body).not.toMatch(/requiresAdmin:\s*true/);
+  const guard = APP_JS.slice(APP_JS.indexOf('router.beforeEach'), APP_JS.indexOf('\n});', APP_JS.indexOf('router.beforeEach')));
+  expect(guard).toMatch(/to\.path === "\/token-report"/);
+  expect(guard).toMatch(/me\.role !== "company_admin" && me\.role !== "admin"/);
 });
 
 describe('沒有全域 admin gate（NEXT-P0-001 不得復辟）', () => {
