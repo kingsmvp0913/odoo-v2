@@ -122,4 +122,5 @@
 - [subagent 流程的實際 token 代價](subagent-review-pattern-token-cost.md) — 一個下午 23% 週額度／19 支／310 萬；該砍哪裡、整枝審查不要砍
 - [舊版前端已整個退役](legacy-frontend-retired.md) — 四個功能從此沒畫面（含整個收件匣頁）；盲刪會白畫四頁而測試全綠
 - [階段 5 更版機制上線但沒設定](stage5-release-live-unconfigured.md) — release_window 是 null 所以不會動；版面被使用者推翻成併回改善提案
+- [產品化規格書已上版控](docs-handoff-tracked.md) — 09-23 commit `11f7b982`；always.md 第 8 條只對其餘 docs/ 成立；記憶快照在 `docs/handoff/memory/`
 - [階段 3 換認證那半完成](stage3-byok-auth-half-done.md) — 客戶沒 key 必須失敗不可退回平台；容器兩份清單只加一份會把 key 印在 ps 上
