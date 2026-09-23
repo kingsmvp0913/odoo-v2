@@ -115,8 +115,8 @@
           _key: 'log-' + l.id, ts: l.created_at, kind: 'log', role: l.role, content: l.content,
           attachments: attByLog[l.id] || []
         }));
-        const blocker = (this.task && this.task.status === 'stopped' && this.task.blocker_content)
-          ? [{ _key: 'blocker', ts: this.task.updated_at, kind: 'log', role: 'blocker', content: this.task.blocker_content }]
+        const blocker = (this.task && this.task.status === 'stopped' && (this.task.blocker_reason || this.task.blocker_content))
+          ? [{ _key: 'blocker', ts: this.task.updated_at, kind: 'log', role: 'blocker', content: this.task.blocker_reason || this.task.blocker_content }]
           : [];
         // 需求本文就是對話的第一則（原本獨立在「需求內容」頁籤）：它是客戶提的那段話，
         // 放進時間軸才讀得出「他要什麼 → 我們怎麼回」的順序。主附件跟著這一則走。
@@ -970,6 +970,13 @@
         } catch (e) { showToast(e.message, 'error'); }
         finally { this.resolving = false; }
       },
+      async requestPlatformHelp() {
+        try {
+          await Api.post(`tasks/${this.task.id}/request-platform-help`, {});
+          showToast('已通知平台管理員', 'success');
+          await this.refreshToLatest();
+        } catch (e) { showToast(e.message, 'error'); }
+      },
       async checkInflight() {
         if (!this.task || this.isTourDemo) return;
         try {
@@ -1158,18 +1165,12 @@
 <div v-if="specForLog(row)" class="ui-next-spec-box ui-next-spec-inline">
 <b v-if="!isLatestSpecLog(row)" class="ui-next-spec-toggle" @click="toggleLog('spec'+row._key)">{{ expandedLogs['spec'+row._key]?'▾':'▸' }} 第 {{ specForLog(row).version||1 }} 版規格（已被後來的版本取代）</b>
 <template v-if="isLatestSpecLog(row)||expandedLogs['spec'+row._key]">
-<template v-if="specForLog(row).module"><b>模組</b><p><code>{{ specForLog(row).module }}</code></p></template>
-<template v-if="specForLog(row).requirements&&specForLog(row).requirements.length">
-<b class="ui-next-spec-toggle" @click="toggleLog('req'+row._key)">{{ expandedLogs['req'+row._key]?'▾':'▸' }} 實作項（給 AI 的施工細節，共 {{ specForLog(row).requirements.length }} 項）</b>
-<ul v-if="expandedLogs['req'+row._key]"><li v-for="(item,index) in specForLog(row).requirements" :key="'req'+index">{{ item }}</li></ul>
-</template>
+<template v-if="specForLog(row).summary"><b>規格摘要</b><p>{{ specForLog(row).summary }}</p></template>
 <template v-if="specForLog(row).acceptance&&specForLog(row).acceptance.length">
-<b>驗收項</b>
+<b>驗收條件</b>
 <ul><li v-for="(item,index) in specForLog(row).acceptance" :key="'acc'+index">{{ item }}</li></ul>
 </template>
-<!-- 權限是審核者唯一能看到「誰能用、能做什麼」的地方：不渲染就等於這一關沒得審，
-     而下游 QA 的判準正是拿實作去比對這一段。 -->
-<template v-if="specForLog(row).permissions&&specForLog(row).permissions.trim()"><b>權限</b><p>{{ specForLog(row).permissions }}</p></template>
+<details v-if="isAdmin&&specForLog(row).raw_yaml"><summary>原始規格（平台管理員）</summary><pre>{{ specForLog(row).raw_yaml }}</pre></details>
 </template>
 </div>
 <button v-if="row.isRequirement&&canEditContent" class="ui-next-req-edit" @click="startEditContent">編輯需求</button>
@@ -1354,6 +1355,8 @@
 </div>
 </template>
 <template v-else-if="timelineActionMode==='conflict'">
+<p v-if="!isAdmin">程式合併遇到衝突，平台管理員處理中。處理完成後任務會繼續。</p>
+<template v-else>
 <!-- 重建 testing 造成的衝突沒有逐檔資料可裁決，硬導進裁決流程會讓人對著空清單無事可做 → 分流到手解收尾。 -->
 <template v-if="conflictItems.length&&!isRebuildConflict">
 <p>自動合併有 {{ conflictItems.length }} 個檔需要你決定。每個檔已附原因與 AI 建議（預設已選建議），確認後送出即可。</p>
@@ -1390,6 +1393,7 @@
 </template>
 <!-- 與裁決卡片並存而非互斥：選了「我自己手解」的檔沒有這顆按鈕就沒有任何收尾入口。 -->
 <button v-if="conflictItems.length&&!isRebuildConflict" @click="markConflictResolved" :disabled="conflictResolving">{{ conflictResolving?'處理中…':'已在 Repo 手動解完剩餘檔，收尾繼續' }}</button>
+</template>
 </template>
 <template v-else-if="timelineActionMode==='cs_reply'">
 <!-- 回覆全文不在這裡重印：cs-agent 已把它寫進 task_logs（[客服回覆]），左側對話流看得到。
@@ -1430,11 +1434,12 @@
 </div>
 </template>
 <template v-else-if="timelineActionMode==='blocker'">
-<p v-if="!task.blocker_content" class="ui-next-error-text">任務分診失敗或執行中斷</p>
+<p v-if="!task.blocker_content&&!task.blocker_reason" class="ui-next-error-text">任務分診失敗或執行中斷</p>
 <textarea v-model="resolution" placeholder="例：改用報表方式呈現，不需要新增欄位；或：忽略該錯誤，直接繼續…" @keydown.enter.exact.prevent="resolveBlocker">
 </textarea>
 <div class="ui-next-action-foot">
 <div class="ui-next-inline-actions ui-next-shortcut-row">
+<button v-if="!isAdmin" @click="requestPlatformHelp">請平台協助</button>
 <button v-for="shortcut in blockerShortcuts" :key="shortcut.label" :title="shortcut.text" :disabled="resolving" @click="submitResolutionShortcut(shortcut.text)">{{ shortcut.label }}</button>
 </div>
 <div class="ui-next-inline-actions">

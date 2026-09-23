@@ -418,7 +418,8 @@ function registerRoutes(app) {
         [req.params.id]
       );
       const specs = specRows
-        .map(r => ({ version: r.version, ...(parseSpecYaml(r.analysis_yaml) || {}) }))
+        .map(r => ({ version: r.version, ...(parseSpecYaml(r.analysis_yaml) || {}),
+          ...(req.actor?.isPlatformAdmin ? { raw_yaml: r.analysis_yaml } : {}) }))
         .filter(s => s.summary !== undefined);
       // 小修正規格（人工審核退回後分診追加）。與主規格分開回傳而不是併進 specs：它存的是純文字條列、
       // 不是 analysis.yaml 的形狀，混進去會被上面那道 parseSpecYaml + summary 過濾整批丟掉（靜默）。
@@ -427,6 +428,21 @@ function registerRoutes(app) {
         [req.params.id]
       );
       const tweakSpecs = tweakRows.map(r => ({ version: r.version, text: r.analysis_yaml }));
+      if (req.actor?.isPlatformAdmin) {
+        if (spec) spec.raw_yaml = tasks[0].analysis_yaml;
+      } else {
+        delete tasks[0].analysis_yaml;
+        if (tasks[0].status === 'stopped') {
+          const reasons = {
+            git_cred: '缺少可用的 GitHub 憑證，請聯絡公司管理員或平台協助設定。',
+            env: '測試環境遇到問題，任務已暫停，請提供處理線索或請平台協助。',
+            code: '程式產出或檢查未通過，任務已暫停，請提供修正方向或請平台協助。',
+            tech: '平台處理過程遇到問題，任務已暫停，請平台協助。',
+          };
+          tasks[0].blocker_reason = reasons[tasks[0].blocker_type] || '任務遇到問題而暫停，請提供處理線索或請平台協助。';
+          delete tasks[0].blocker_content;
+        }
+      }
       res.json({ task: tasks[0], logs: logs.reverse(), attachments, clarification, spec, specs, tweakSpecs });
     } catch (err) {
       res.status(500).json({ error: err.message });
@@ -1002,6 +1018,19 @@ function registerRoutes(app) {
         );
       }
       runPipeline(task.user_id).catch(err => console.error('[TASKS] pipeline error:', err.message));
+      res.json({ ok: true });
+    } catch (err) { res.status(500).json({ error: err.message }); }
+  });
+
+  app.post('/api/tasks/:id/request-platform-help', verifyToken, async (req, res) => {
+    try {
+      const task = await loadTaskForActor(req.params.id, req, 'id, status');
+      if (!task) return res.status(404).json({ error: 'Task not found' });
+      if (task.status !== 'stopped') return res.status(400).json({ error: '只有失敗待確認的任務可以請平台協助' });
+      await query("INSERT INTO task_logs (task_id, role, content) VALUES ($1, 'user', '[請平台協助] 已通知平台管理員')", [task.id]);
+      const { rows: admins } = await query("SELECT id FROM users WHERE role = 'admin'");
+      const notify = require('./notify');
+      for (const admin of admins) notify.emitToUser(admin.id, 'task:updated', { taskId: task.id, status: 'stopped' });
       res.json({ ok: true });
     } catch (err) { res.status(500).json({ error: err.message }); }
   });

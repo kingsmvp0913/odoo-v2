@@ -134,3 +134,101 @@ describe('GET /api/projects/:id 的 can_release（單一專案，供 ProjectDeta
     expect(res.body.can_release).toBeUndefined();
   });
 });
+
+describe('待上正式清單與執行權分開', () => {
+  let taskId;
+  beforeAll(async () => {
+    const submitter = await one("SELECT id FROM users WHERE username = 'coAUser'");
+    taskId = 'RELEASE-VISIBLE-1';
+    await dbModule.query(
+      `INSERT INTO tasks (user_id, task_id, source, title, status, project_id, approved_at)
+       VALUES ($1,$2,'manual','待上正式的改動','done',$3,NOW())`,
+      [submitter.id, taskId, pTrue]
+    );
+  });
+
+  test('一般成員能唯讀同專案清單與提出者資訊，但不能執行上正式', async () => {
+    const list = await request(app).get(`/api/projects/${pTrue}/pending-release`).set(as(normalUserToken));
+    expect(list.status).toBe(200);
+    expect(list.body.tasks).toEqual([expect.objectContaining({
+      task_id: taskId, submitter_name: 'coAUser', submitter_company: '甲公司',
+    })]);
+    expect(list.body.prodDeploy.canRelease).toBe(false);
+    const release = await request(app).post(`/api/projects/${pTrue}/release`).set(as(normalUserToken)).send({});
+    expect(release.status).toBe(403);
+  });
+
+  test('公司管理員只在綁定可上正式的專案取得權限', async () => {
+    const allowed = await request(app).get(`/api/projects/${pTrue}/pending-release`).set(as(companyAdminToken));
+    const denied = await request(app).get(`/api/projects/${pFalse}/pending-release`).set(as(companyAdminToken));
+    expect(allowed.body.prodDeploy.canRelease).toBe(true);
+    expect(denied.body.prodDeploy.canRelease).toBe(false);
+    expect((await request(app).post(`/api/projects/${pFalse}/release`).set(as(companyAdminToken)).send({})).status).toBe(403);
+  });
+
+  test('別家公司連清單也看不到', async () => {
+    const res = await request(app).get(`/api/projects/${pTrue}/pending-release`).set(as(outsiderToken));
+    expect(res.status).toBe(404);
+    expect(res.body.tasks).toBeUndefined();
+  });
+});
+
+test('客戶看規格摘要與驗收條件，但 API 不傳原始 YAML；平台管理員可看原文', async () => {
+  const submitter = await one("SELECT id FROM users WHERE username = 'coAUser'");
+  const raw = 'summary: 客戶可看懂的摘要\nacceptance:\n  - 驗收可使用\nrequirements:\n  - 內部實作細節\n';
+  const task = await one(
+    `INSERT INTO tasks (user_id, task_id, source, title, status, project_id, analysis_yaml)
+     VALUES ($1,'SPEC-VISIBLE-1','manual','規格可見性','spec_review',$2,$3) RETURNING id`,
+    [submitter.id, pTrue, raw]
+  );
+  await dbModule.query(
+    "INSERT INTO task_specs (task_id, version, kind, analysis_yaml) VALUES ($1,1,'main',$2)",
+    [task.id, raw]
+  );
+  const customer = await request(app).get(`/api/tasks/${task.id}`).set(as(normalUserToken));
+  expect(customer.status).toBe(200);
+  expect(customer.body.spec).toEqual(expect.objectContaining({ summary: '客戶可看懂的摘要', acceptance: ['驗收可使用'] }));
+  expect(customer.body.task.analysis_yaml).toBeUndefined();
+  expect(customer.body.spec.raw_yaml).toBeUndefined();
+  expect(customer.body.specs[0].raw_yaml).toBeUndefined();
+  const platform = await request(app).get(`/api/tasks/${task.id}`).set(as(adminToken));
+  expect(platform.status).toBe(200);
+  expect(platform.body.spec.raw_yaml).toBe(raw);
+  expect(platform.body.specs[0].raw_yaml).toBe(raw);
+});
+
+test('合併衝突只能由平台管理員裁決，客戶不能直接呼叫 API 繞過畫面', async () => {
+  const submitter = await one("SELECT id FROM users WHERE username = 'coAUser'");
+  const task = await one(
+    `INSERT INTO tasks (user_id, task_id, source, title, status, project_id)
+     VALUES ($1,'CONFLICT-PLATFORM-1','manual','合併衝突','merge_conflict',$2) RETURNING id`,
+    [submitter.id, pTrue]
+  );
+  for (const endpoint of ['mark-conflict-resolved', 'resolve-conflicts', 'merge-clarify']) {
+    for (const token of [normalUserToken, companyAdminToken]) {
+      const res = await request(app).post(`/api/tasks/${task.id}/${endpoint}`).set(as(token)).send({});
+      expect(res.status).toBe(403);
+    }
+  }
+});
+
+test('客戶停下時只看白話原因，請平台協助會留紀錄並通知管理員', async () => {
+  const submitter = await one("SELECT id FROM users WHERE username = 'coAUser'");
+  const task = await one(
+    `INSERT INTO tasks (user_id, task_id, source, title, status, project_id, blocker_type, blocker_content)
+     VALUES ($1,'BLOCKER-HELP-1','manual','待協助','stopped',$2,'env','Traceback: secret diagnostic') RETURNING id`,
+    [submitter.id, pTrue]
+  );
+  const customer = await request(app).get(`/api/tasks/${task.id}`).set(as(normalUserToken));
+  expect(customer.status).toBe(200);
+  expect(customer.body.task.blocker_reason).toContain('測試環境');
+  expect(customer.body.task.blocker_content).toBeUndefined();
+  const platform = await request(app).get(`/api/tasks/${task.id}`).set(as(adminToken));
+  expect(platform.body.task.blocker_content).toContain('Traceback');
+  const help = await request(app).post(`/api/tasks/${task.id}/request-platform-help`).set(as(normalUserToken)).send({});
+  expect(help.status).toBe(200);
+  const log = await one("SELECT content FROM task_logs WHERE task_id = $1 AND content LIKE '[請平台協助]%'", [task.id]);
+  expect(log.content).toContain('已通知平台管理員');
+  const denied = await request(app).post(`/api/tasks/${task.id}/request-platform-help`).set(as(outsiderToken)).send({});
+  expect(denied.status).toBe(404);
+});

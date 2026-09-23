@@ -94,3 +94,20 @@ test('emitToUser 對非 action 狀態不派送 notify:action', async () => {
 
   expect(emit.mock.calls.find(c => c[0] === 'notify:action')).toBeFalsy();
 });
+
+test('客戶任務合併衝突改通知平台管理員，不要求客戶裁決', async () => {
+  const { query } = require('../db');
+  query.mockImplementation(async (sql) => ({ rows: /WHERE role = 'admin'/.test(sql)
+    ? [{ id: 7 }, { id: 8 }] : [{ task_id: 'task_9', title: '測試任務' }] }));
+  const { io, emit } = fakeIo();
+  notify.setIo(io);
+  notify.emitToUser(3, 'task:updated', { taskId: 1, status: 'merge_conflict' });
+  await new Promise(r => setImmediate(r));
+  expect(io.to).toHaveBeenCalledWith('user:3');
+  expect(io.to).toHaveBeenCalledWith('user:7');
+  expect(io.to).toHaveBeenCalledWith('user:8');
+  const actions = emit.mock.calls.filter(c => c[0] === 'notify:action');
+  expect(actions).toHaveLength(2);
+  expect(query.mock.calls.filter(c => /INSERT INTO user_inbox/.test(c[0])).map(c => c[1][0])).toEqual([7, 8]);
+  query.mockReset().mockResolvedValue({ rows: [{ task_id: 'task_9', title: '測試任務' }] });
+});

@@ -10,7 +10,7 @@ window.ReleaseModal = {
       pending: [], loading: true, working: false, repos: null, deploy: null,
       deploySkipped: false, deploySkipReason: null,
       // 後端說「這一按會不會動到客戶正式機」。預設當成不會，抓失敗時才不會憑空嚇人。
-      prodDeploy: { autoDeploy: false, targets: 0, isAdmin: false },
+      prodDeploy: { autoDeploy: false, targets: 0, canRelease: false },
       confirmDeploy: false,
     };
   },
@@ -19,12 +19,12 @@ window.ReleaseModal = {
     // 否則畫面要人勾一個後端根本不看的框，或反過來沒勾就被擋（看起來像壞掉）。
     willDeployProd() {
       const p = this.prodDeploy || {};
-      return !!(p.autoDeploy && p.targets > 0 && p.isAdmin);
+      return !!(p.autoDeploy && p.targets > 0 && p.canRelease);
     },
     // 有目標可部署、但這個人沒權限：合併照做，正式區不會動。要先講，不要等按完才說。
     prodNeedsAdmin() {
       const p = this.prodDeploy || {};
-      return !!(p.autoDeploy && p.targets > 0 && !p.isAdmin);
+      return !!(p.autoDeploy && p.targets > 0 && !p.canRelease);
     },
     // 沒勾確認時不把按鈕鎖住，改成讓標籤說實話：想只合併不部署是合理需求，
     // 鎖住按鈕會讓那個人以為畫面壞了，而且沒有別的地方可以只合併。
@@ -84,7 +84,7 @@ window.ReleaseModal = {
   template: `
     <div class="modal-overlay" @mousedown.self="$emit('close')" @keyup.esc="$emit('close')">
       <div class="modal modal-elevated release-modal-width" role="dialog" aria-modal="true">
-        <div class="modal-title">合併到正式（main）</div>
+        <div class="modal-title">{{ prodDeploy.canRelease?'合併到正式（main）':'待上正式清單' }}</div>
         <div class="modal-body">
           <div v-if="loading" class="loading">載入中...</div>
           <template v-else>
@@ -99,8 +99,9 @@ window.ReleaseModal = {
                 <div v-for="t in pending" :key="t.task_id"
                   class="release-task-row">
                   <span style="font-weight:var(--fw-semibold);flex-shrink:0">#{{ t.task_id }}</span>
-                  <span style="flex:1;min-width:0">{{ t.title }}</span>
-                  <span style="font-size:var(--fs-xs);color:var(--text-muted);flex-shrink:0">{{ t.status }}</span>
+                  <span style="flex:1;min-width:0">{{ t.title }}<br>
+                    <small>{{ t.submitter_name }}<template v-if="t.submitter_company">（{{ t.submitter_company }}）</template> · {{ new Date(t.approved_at).toLocaleString('zh-TW') }} 核准</small>
+                  </span>
                 </div>
               </div>
               <div style="font-size:var(--fs-sm);color:var(--text-muted);margin-top:var(--space-3)">
@@ -118,7 +119,7 @@ window.ReleaseModal = {
                   <span>我了解失敗時資料庫救不回來，確認一併部署到正式區</span>
                 </label>
               </div>
-              <div v-else-if="prodNeedsAdmin"
+              <div v-else-if="prodDeploy.canRelease && prodNeedsAdmin"
                 style="font-size:var(--fs-sm);color:var(--text-muted);margin-top:var(--space-3)">
                 此專案有啟用中的正式區部署目標，但部署到客戶正式區需要管理員權限。
                 這次只會合併到 main，客戶正式區不會更新。
@@ -155,7 +156,7 @@ window.ReleaseModal = {
         </div>
         <div class="modal-actions">
           <button class="btn btn-outline" @click="$emit('close')" :disabled="working">取消</button>
-          <button class="btn btn-primary" @click="doRelease"
+          <button v-if="prodDeploy.canRelease" class="btn btn-primary" @click="doRelease"
             :disabled="working || loading || pending.length === 0">
             <span v-if="working" class="spinner"></span>{{ working ? '合併中…' : actionLabel }}
           </button>

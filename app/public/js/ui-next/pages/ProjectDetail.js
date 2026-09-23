@@ -174,7 +174,7 @@
 <!-- 條件用後端算好的 project.can_release（GET /api/projects/:id 已補，見 project-routes.js），
      不能用 isAdmin：判準是 canReleaseProject（平台管理員 or 該專案綁定勾了可上正式的公司管理員），
      光看 role 算不出來，掛 isAdmin 會把有權限的公司管理員也擋掉。 -->
-<button v-if="project.can_release" @click="showReleaseModal=true" :disabled="!repos.some(r=>r.clone_status==='done')">上正式</button>
+<button @click="showReleaseModal=true" :disabled="project.can_release&&!repos.some(r=>r.clone_status==='done')">{{ project.can_release?'上正式':'待上正式清單' }}</button>
 <button class="ui-next-back" @click="$router.push('/projects')"><ui-next-icon name="arrow-left"/> 所有專案</button>
 </div>
 </header>

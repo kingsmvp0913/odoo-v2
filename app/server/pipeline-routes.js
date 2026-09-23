@@ -6,6 +6,7 @@ const { verifyToken } = require('./auth');
 const { safeReturnStatus } = require('./pipeline/stations');
 const { runPipeline, getInflightTaskIds } = require('./pipeline/runner');
 const { loadTaskForActor } = require('./lib/task-access');
+const { requirePlatformAdmin } = require('./lib/tenant-access');
 const { isSafeRegularFileInside, unsafeReason } = require('./lib/safe-worktree-read');
 const { saveAttachmentFile, uploadAttachmentFiles } = require('./lib/attachments');
 const { machineLogHeader } = require('../public/js/machine-logs.js');
@@ -435,7 +436,7 @@ function registerRoutes(app) {
     }
   });
 
-  app.post('/api/tasks/:id/mark-conflict-resolved', verifyToken, async (req, res) => {
+  app.post('/api/tasks/:id/mark-conflict-resolved', verifyToken, requirePlatformAdmin, async (req, res) => {
     try {
       const task = await loadTaskForActor(req.params.id, req, 'id, status, project_id, merge_conflict_data, merge_resolutions, user_id');
       if (!task) return res.status(404).json({ error: 'Task not found' });
@@ -541,7 +542,7 @@ function registerRoutes(app) {
   // 對每個 repo 套用裁決（取一側或保留人工）＋接受已自動解好的檔，全部收斂則 commit → deploy_testing；
   // 仍有 manual／未決檔則留 merge_conflict（提示使用者手解剩餘檔後按「已手動解決」收尾）。
   const RESOLVE_ACTIONS = ['take_theirs', 'take_ours', 'manual'];
-  app.post('/api/tasks/:id/resolve-conflicts', verifyToken, async (req, res) => {
+  app.post('/api/tasks/:id/resolve-conflicts', verifyToken, requirePlatformAdmin, async (req, res) => {
     try {
       const task = await loadTaskForActor(req.params.id, req, 'id, status, project_id, merge_conflict_data, user_id');
       if (!task) return res.status(404).json({ error: 'Task not found' });
@@ -651,7 +652,7 @@ function registerRoutes(app) {
 
   // 逐檔追問釐清（給非工程師）：body = { repo, file, question }。針對單一衝突檔問 AI，白話作答並在必要
   // 時調整 ★建議；問答串存回 merge_conflict_data.details[file].qa。全程停 merge_conflict、不推進 pipeline。
-  app.post('/api/tasks/:id/merge-clarify', verifyToken, async (req, res) => {
+  app.post('/api/tasks/:id/merge-clarify', verifyToken, requirePlatformAdmin, async (req, res) => {
     try {
       const task = await loadTaskForActor(req.params.id, req, 'id, task_id, status, project_id, merge_conflict_data, analysis_yaml');
       if (!task) return res.status(404).json({ error: 'Task not found' });

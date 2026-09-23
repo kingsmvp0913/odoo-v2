@@ -972,10 +972,13 @@ function registerRoutes(app) {
   // 待上正式＝已核准併進 ai-dev、但尚未被「上正式」按鈕推上 main 的任務。
   // 前端 TaskList 的「待上正式」篩選用同一份定義，兩處數字必然一致。
   const PENDING_RELEASE_SQL =
-    `SELECT task_id, title, status, approved_at
-     FROM tasks
-     WHERE project_id = $1 AND approved_at IS NOT NULL AND merged_to_main_at IS NULL
-     ORDER BY approved_at`;
+    `SELECT t.task_id, t.title, t.status, t.approved_at,
+            u.display_name AS submitter_name, c.name AS submitter_company
+     FROM tasks t
+     JOIN users u ON u.id = t.user_id
+     LEFT JOIN companies c ON c.id = u.company_id
+     WHERE t.project_id = $1 AND t.approved_at IS NOT NULL AND t.merged_to_main_at IS NULL
+     ORDER BY t.approved_at`;
 
   app.get('/api/projects/:id/pending-release', verifyToken, async (req, res) => {
     try {
@@ -983,13 +986,8 @@ function registerRoutes(app) {
       if (!await loadProjectForActor(req.params.id, req, 'id')) {
         return res.status(404).json({ error: '找不到專案' });
       }
-      // 這支餵的是「上正式」彈窗，PENDING_RELEASE_SQL 沒有 user 條件——會把全公司每個人已核准
-      // 任務的標題都吐給打這支 API 的人。看得到專案不等於看得到別人任務的標題，門檻要跟真正
-      // 按得下「上正式」的人一致：平台管理員，或該公司綁定勾了 can_release 的公司管理員（規格
-      // §8 P1、§4.3）。看得到專案但按不了 → 403，不是 404（看得到本身沒有洩漏，403 才是正確語意）。
-      if (!await canReleaseProject(req.actor, req.params.id)) {
-        return res.status(403).json({ error: '只有平台管理員或公司管理員能查看待上正式清單' });
-      }
+      // 規格 §8 P5：看得到專案的成員可唯讀待上正式清單；真正上正式仍由 POST 的權限檢查把關。
+      const canRelease = await canReleaseProject(req.actor, req.params.id);
       const { rows } = await query(PENDING_RELEASE_SQL, [req.params.id]);
       // 彈窗要先知道「按下去會不會動到客戶正式機」才有辦法把警告寫對。
       // 沒有這段的話，警告只能寫死成一句通用的話，於是每次都出現，於是沒有人會看。
@@ -1003,7 +1001,7 @@ function registerRoutes(app) {
         prodDeploy: {
           autoDeploy: !!(p && p.auto_deploy_enabled),
           targets: n.c,
-          isAdmin: await isAdminUser(req.userId),
+          canRelease,
         },
       });
     } catch (err) { res.status(500).json({ error: err.message }); }
@@ -1097,9 +1095,9 @@ function registerRoutes(app) {
         } else if (!targets.length) {
           deploySkipped = true;
           deploySkipReason = '此專案沒有啟用中的正式區部署目標，客戶正式區未更新。';
-        } else if (!await isAdminUser(req.userId)) {
+        } else if (!await canReleaseProject(req.actor, project.id)) {
           deploySkipped = true;
-          deploySkipReason = '部署到客戶正式區需要管理員權限。程式已上 main，請通知管理員執行部署。';
+          deploySkipReason = '部署到客戶正式區需要這個專案的上正式權限。程式已上 main，請通知管理員執行部署。';
         } else if (req.body.confirmDeploy !== true) {
           deploySkipped = true;
           deploySkipReason = '未確認正式區部署。程式已上 main，客戶正式區未更新。';

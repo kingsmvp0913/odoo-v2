@@ -15,10 +15,19 @@ function setIo(io) { _io = io; }
 
 function emitToUser(userId, event, data) {
   if (_io) _io.to(`user:${userId}`).emit(event, data);
+  if (event === 'task:updated' && data?.status === 'merge_conflict') {
+    _dispatchConflictToAdmins(data.taskId).catch(() => {});
+    return;
+  }
   // 攔截狀態更新：進入需動作狀態時，額外派送 action 通知（補查 title 供顯示）
   if (event === 'task:updated' && data && ACTION_STATUSES.has(data.status)) {
     _dispatchAction(userId, data.taskId, data.status).catch(() => {});
   }
+}
+
+async function _dispatchConflictToAdmins(taskId) {
+  const { rows } = await query("SELECT id FROM users WHERE role = 'admin'");
+  await Promise.all(rows.map(r => _dispatchAction(r.id, taskId, 'merge_conflict')));
 }
 
 function emitAll(event, data) {
