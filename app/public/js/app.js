@@ -96,7 +96,11 @@ window.loadUnread = loadUnread;
 
 const ForbiddenView = {
   name: "ForbiddenView",
-  template: `<main class="auth-container" aria-labelledby="forbidden-title"><section class="auth-card"><h1 id="forbidden-title">403：沒有存取權限</h1><p>你的帳號沒有權限使用此頁面。</p><router-link to="/">返回首頁</router-link></section></main>`,
+  // ⚠ 這頁原本用 .auth-container／.auth-card——那是**舊版前端的 class**，2026-09-22 舊版
+  // 整個退役時連同 CSS 一起刪了，於是這頁從那天起一直是完全沒有樣式的裸 HTML
+  // （瀏覽器預設 h1、藍色底線連結、貼齊左上角），而它是客戶亂點時最常撞到的一頁。
+  // 沒有任何測試會紅——class 不存在不是語法錯誤。改用與其他頁相同的 .ui-next-page 外殼。
+  template: `<section class="ui-next-page" aria-labelledby="forbidden-title"><header class="ui-next-page-head"><div><h1 id="forbidden-title">403：沒有存取權限</h1><p>你的帳號沒有權限使用這個頁面。如果你認為應該有權限，請聯絡貴公司的管理員。</p><button class="btn btn-primary btn-sm" @click="$router.push('/')">返回首頁</button></div></header></section>`,
 };
 
 const router = createRouter({
