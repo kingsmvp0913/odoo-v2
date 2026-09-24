@@ -28,7 +28,7 @@ const { readSections, matchToPages, assignByOrder } = require('./lib/exam/sectio
 const { emitAll } = require('./notify');
 const { buildClaudeAuthEnv } = require('./lib/claude-auth');
 const { canSeeBank, bankScopeClause, bankOwnerClause, bankOwnerForUser,
-  requireInternal } = require('./lib/exam/scope');
+  bankOwnerForActor, requireInternal } = require('./lib/exam/scope');
 
 const MAX_IMAGE_BYTES = parseInt(process.env.EXAM_MAX_IMAGE_BYTES || String(20 * 1024 * 1024), 10);
 const BATCH_BODY_LIMIT = process.env.EXAM_BATCH_BODY_LIMIT || '60mb';
@@ -846,19 +846,37 @@ function registerRoutes(app) {
   });
 
   app.patch('/api/exam/attempts/:id/final', verifyToken, requireFeature('exam'), express.json(), async (req, res) => {
-    // 正式答案是歸檔時對成績單、鎖成官方答案的那一份，歸檔不可逆——只給管理員改，
-    // 其他人表達意見走投票。前端藏勾勾擋不住直接打 API。
-    if (!req.isAdmin) return res.status(403).json({ error: '只有管理員能改正式答案，其他人請用投票' });
+    // 正式答案是歸檔時對成績單、鎖成官方答案的那一份，歸檔不可逆——一般使用者一律不行，
+    // 表達意見走投票。前端藏勾勾擋不住直接打 API。
+    //
+    // 2026-09-24 使用者裁決：公司管理員可以定案**自家場次**（原本只有平台管理員能定案，
+    // 於是客戶那邊永遠累積不出官方答案，「越考越準」對他們只有一半）。
+    // ⚠ 使用者在做這個決定時已被告知代價：客戶定案的答案歸檔後會寫進**跨公司共用**的
+    // exam_items（answer_official + certain=TRUE），內部下次考試會拿它當官方答案，
+    // 而且不可逆、寫錯只能人工改 DB。這是知情的取捨，不是漏想。
+    if (!req.isAdmin && !req.actor?.isCompanyAdmin) {
+      return res.status(403).json({ error: '只有管理員能改正式答案，其他人請用投票' });
+    }
     try {
       const attemptId = parseInt(req.params.id, 10);
       if (!Number.isInteger(attemptId)) return res.status(400).json({ error: 'id 不合法' });
       const answer = answerValue(req.body.answer);
       const attempt = (await query(
-        `SELECT a.bank_id, i.official_from, i.answer_official
-           FROM exam_attempts a JOIN exam_items i ON i.id=a.item_id WHERE a.id=$1`,
+        `SELECT a.bank_id, b.company_id, i.official_from, i.answer_official
+           FROM exam_attempts a
+           JOIN exam_banks b ON b.id = a.bank_id
+           JOIN exam_items i ON i.id = a.item_id WHERE a.id=$1`,
         [attemptId])).rows[0];
-      if (!attempt) return res.status(404).json({ error: '找不到這題' });
-      if (!await ensureBankVisible(req, res, attempt.bank_id)) return;
+      // 不存在與看不到走同一個分支、同一句話（理由見 retry 那支的註解）
+      if (!attempt || !await canSeeBank(req.actor, attempt.bank_id)) {
+        return res.status(404).json({ error: '找不到這題' });
+      }
+      // 「自家場次」：公司管理員只能定案 owner 與自己相同的那些場。
+      // 不能只靠 canSeeBank——**內部**的人看得到全部場次（scope.js 的 seesAllBanks 是刻意的），
+      // 光靠可見性會讓內部的公司管理員定案到客戶的場次去。平台管理員不受此限。
+      if (!req.isAdmin && (attempt.company_id ?? null) !== bankOwnerForActor(req.actor)) {
+        return res.status(403).json({ error: '只能定案自家公司的場次' });
+      }
       if (attempt.official_from && attempt.answer_official && attempt.answer_official.length) {
         return res.status(409).json({ error: '官方確認題已鎖定' });
       }

@@ -40,8 +40,11 @@ window.UiNextExamRunView = Vue.defineComponent({
     if (this._offSocket) this._offSocket();
   },
   computed: {
-    // 正式答案的勾只給管理員（server 端 PATCH /final 另外擋 403），其他人只能投票
     isAdmin() { return window.UserStore.role === 'admin'; },
+    // 正式答案的勾：平台管理員與公司管理員（2026-09-24 裁決，公司管理員限自家場次）。
+    // 「自家」由後端判（scope.js 的 bankOwnerForActor），前端只管要不要畫得出來——
+    // 作戰台本來就只列得出自己看得到的場次，一般使用者仍然只能投票。
+    canFinalize() { return this.isAdmin || window.UserStore.role === 'company_admin'; },
     userStore() { return window.UserStore; },
     uploadGroups() {
       const questions = new Map();
@@ -676,7 +679,7 @@ window.UiNextExamRunView = Vue.defineComponent({
                   <label>
                     <!-- 沒改過時勾選狀態本身就是原答案（answer_final 預設等於作答答案）；
                          改過之後選項文字後面會掛「原答案」標記。 -->
-                    <input type="checkbox" :title="(isAdmin ? '' : '只有管理員能改，請用投票・') + (hasAnswer(q.answer_their,option.letter) ? '正式答案（這是原本輸入的答案）' : '正式答案')" :checked="isFinalSelected(q,option.letter)" :disabled="!isAdmin || savingFinal[q.attempt_id]" @change="toggleFinal(q,option.letter,$event.target.checked)" />
+                    <input type="checkbox" :title="(canFinalize ? '' : '只有管理員能改，請用投票・') + (hasAnswer(q.answer_their,option.letter) ? '正式答案（這是原本輸入的答案）' : '正式答案')" :checked="isFinalSelected(q,option.letter)" :disabled="!canFinalize || savingFinal[q.attempt_id]" @change="toggleFinal(q,option.letter,$event.target.checked)" />
                     <b>{{ option.letter }}</b>
                     <span class="ui-next-exam-run-opt-text">
                       <!-- 只有兩個標記：推薦分數與投票。

@@ -149,9 +149,14 @@ test('官方確認的題不算需確認', () => {
 });
 
 // server 已經擋 403；前端再鎖是讓一般人一眼看出「這不是給我按的」，而不是按下去才跳錯。
-test('正式答案的勾只有管理員能按，其他人仍可投票', () => {
-  expect(view).toContain("isAdmin() { return window.UserStore.role === 'admin'; }");
-  expect(view).toMatch(/type="checkbox"[^>]*:disabled="!isAdmin \|\| savingFinal\[q\.attempt_id\]"/);
+// 2026-09-24 由「只有平台管理員」放寬成「平台管理員＋公司管理員」（使用者裁決：客戶那邊
+// 原本永遠累積不出官方答案）。「自家場次」由後端判（scope.js 的 bankOwnerForActor），
+// 前端只管畫不畫得出來——**一般使用者仍然一顆都按不到**，那是這條守的東西。
+test('正式答案的勾只有管理員能按，一般使用者仍可投票', () => {
+  expect(view).toContain("canFinalize() { return this.isAdmin || window.UserStore.role === 'company_admin'; }");
+  expect(view).toMatch(/type="checkbox"[^>]*:disabled="!canFinalize \|\| savingFinal\[q\.attempt_id\]"/);
+  // 'user' 不在放行名單裡——寫成 role !== 'user' 這種反向條件會把未來的新角色一起放進來
+  expect(view).not.toMatch(/canFinalize\(\)[^\n]*!==/);
   // 投票按鈕不能跟著被鎖
   expect(view).toContain('<button v-if="!q.has_voted" class="ui-next-exam-run-vote"');
 });

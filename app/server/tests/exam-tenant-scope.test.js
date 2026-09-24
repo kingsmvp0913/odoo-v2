@@ -75,6 +75,8 @@ beforeAll(async () => {
   tok.internal = await mkUser('internal-user', 'user', coInternal);
   tok.a = await mkUser('a-user', 'user', coA);
   tok.b = await mkUser('b-user', 'user', coB);
+  tok.aAdmin = await mkUser('a-admin', 'company_admin', coA);
+  tok.intAdmin = await mkUser('int-admin', 'company_admin', coInternal);
 
   const mkBank = async (label, companyId) => (await one(
     "INSERT INTO exam_banks (label, odoo_version, company_id) VALUES ($1,'19',$2) RETURNING id",
@@ -311,5 +313,54 @@ describe('訊息不得洩漏 id 是否存在（規格 §3.2）', () => {
     const ghost = await request(app).post('/api/exam/attempts/99999999/vote').set(as(tok.a)).send({ answer: 'A' });
     expect(`${mine.status} ${mine.body.error}`).toBe(`${ghost.status} ${ghost.body.error}`);
     expect(mine.status).toBe(404);
+  });
+});
+
+// 2026-09-24 裁決：公司管理員可以定案**自家場次**的正式答案（原本只有平台管理員能定案，
+// 於是客戶那邊永遠累積不出官方答案）。使用者做這個決定時已被告知代價：定案的答案歸檔後
+// 會寫進跨公司共用的 exam_items，內部下次考試會拿它當官方答案，而且不可逆。
+//
+// 這裡守的是那個授權的**邊界**，不是那個裁決本身。最容易寫錯的是「只用 canSeeBank 判自家」：
+// 內部的人看得到全部場次（scope.js 的 seesAllBanks 是刻意的），光靠可見性會讓內部的
+// 公司管理員定案到客戶的場次去——而那條路沒有任何徵狀。
+describe('定案正式答案的授權邊界', () => {
+  const mkAttempt = async (bankId, fp) => {
+    const { rows: [item] } = await dbModule.query(
+      "INSERT INTO exam_items (odoo_version, fingerprint, question_en) VALUES ('19',$1,'Q') RETURNING id", [fp]);
+    return (await dbModule.query(
+      "INSERT INTO exam_attempts (bank_id, item_id) VALUES ($1,$2) RETURNING id", [bankId, item.id])).rows[0].id;
+  };
+  const final = (who, id) => request(app).patch(`/api/exam/attempts/${id}/final`)
+    .set(as(tok[who])).send({ answer: 'A' });
+
+  test('公司管理員定案自家場次 → 成功', async () => {
+    const id = await mkAttempt(bankA, 'fin-own');
+    const res = await final('aAdmin', id);
+    expect(`${res.status} ${res.body.error || ''}`.trim()).toBe('200');
+  });
+
+  test('公司管理員定案別家場次 → 404（看不到就是不存在，不洩漏 id）', async () => {
+    const id = await mkAttempt(bankB, 'fin-other');
+    expect((await final('aAdmin', id)).status).toBe(404);
+  });
+
+  test('一般使用者一律不行，連自家的也不行', async () => {
+    const id = await mkAttempt(bankA, 'fin-user');
+    const res = await final('a', id);
+    expect(res.status).toBe(403);
+    expect(res.body.error).toMatch(/投票/);
+  });
+
+  // 這條是上面那段註解的牙齒：內部的公司管理員看得到客戶的場次（刻意），但不得定案它。
+  test('內部的公司管理員看得到客戶場次，但不得定案（可見 ≠ 有權）', async () => {
+    const id = await mkAttempt(bankA, 'fin-int-cross');
+    const res = await final('intAdmin', id);
+    expect(res.status).toBe(403);
+    expect(res.body.error).toMatch(/自家/);
+  });
+
+  test('內部的公司管理員定案內部場次 → 成功', async () => {
+    const id = await mkAttempt(bankInternal, 'fin-int-own');
+    expect((await final('intAdmin', id)).status).toBe(200);
   });
 });
