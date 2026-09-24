@@ -62,7 +62,7 @@ describe('設定 key', () => {
     await expect(setCompanyAnthropicKey(
       { companyId: 7, apiKey: 'sk-bad', actorUserId: 2 },
       { query: db.query, runClaude: authFail, looksLikeAuthFailure: () => false }
-    )).rejects.toMatchObject({ status: 400, message: 'API key 無效或已撤銷，未儲存' });
+    )).rejects.toMatchObject({ status: 400, message: '憑證無效或已撤銷，未儲存' });
     expect(updates(db)).toHaveLength(0);
   });
 

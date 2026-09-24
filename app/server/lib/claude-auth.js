@@ -104,7 +104,7 @@ async function buildClaudeAuthEnv(userId) {
 
   // 以下是客戶公司。
   if (!r.anthropic_key_enc) {
-    throw new NoAnthropicKeyError('這家公司還沒有設定 Anthropic API key，AI 無法執行。請公司管理員在設定頁填入。');
+    throw new NoAnthropicKeyError('這家公司還沒有設定 Claude 認證憑證，AI 無法執行。請公司管理員在「公司帳號」頁填入。');
   }
   // 停用或到期的公司，它的憑證不可以再被拿來跑 AI（規格 §7）。HTTP 那側的全域閘門擋得住
   // 網頁操作，但 cron、夜間批次、系統觸發的執行不經過 HTTP——與 buildGitEnv 同一個理由。
@@ -112,7 +112,16 @@ async function buildClaudeAuthEnv(userId) {
   if (!await isUserCompanyUsable(userId)) {
     throw new NoAnthropicKeyError('這家公司已停用或不在使用期間，不能再用它的憑證執行 AI。');
   }
-  return { ANTHROPIC_API_KEY: decrypt(r.anthropic_key_enc) };
+  // ⚠ **客戶存的是訂閱 token（`claude setup-token` 產生的），不是按量計費的 API key**
+  //（2026-09-24 使用者裁決：「全部都要走 CLAUDE_CODE_OAUTH_TOKEN」「API 我玩不起」）。
+  // 欄位名還叫 anthropic_key_enc 是歷史遺留，改名要動 migration 而換不到任何行為。
+  //
+  // ⚠ 這個變數是三者裡**優先序最低**的（見 shadowingEnvVar）。環境裡只要有
+  // ANTHROPIC_AUTH_TOKEN 或 ANTHROPIC_API_KEY，這一把就會被無聲蓋掉，而症狀是
+  // 「客戶設定了自己的憑證，帳單卻還是記在廠商頭上」——不會報錯。容器路徑靠 env
+  // 白名單擋住了（lib/agent-sandbox.js 只放行清單內的鍵），非容器路徑則由
+  // shadowingEnvVar 在設定頁回報。
+  return { CLAUDE_CODE_OAUTH_TOKEN: decrypt(r.anthropic_key_enc) };
 }
 
 // 用量量測要拿「指定的那一把」去打 usage API，而不是永遠打本機憑證檔

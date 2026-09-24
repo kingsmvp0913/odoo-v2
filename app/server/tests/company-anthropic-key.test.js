@@ -56,7 +56,9 @@ test('驗證用的是「候選 key」本人，不是平台那把也不是舊值'
   let seen = null;
   mockRunClaude = async (_prompt, opts) => { seen = opts.env; return { ok: true }; };
   await put(companyId, { api_key: 'sk-ant-候選' });
-  expect(`候選 key 有傳進去: ${seen && seen.ANTHROPIC_API_KEY === 'sk-ant-候選'}`).toBe('候選 key 有傳進去: true');
+  // 2026-09-24 起客戶存的是訂閱 token，變數名跟著換。寫錯的話會驗到平台那把而不是
+  // 候選這把——等於沒驗，而且一定「通過」。
+  expect(`候選憑證有傳進去: ${seen && seen.CLAUDE_CODE_OAUTH_TOKEN === 'sk-ant-候選'}`).toBe('候選憑證有傳進去: true');
 });
 
 test('key 無效 → 擋下，不存', async () => {

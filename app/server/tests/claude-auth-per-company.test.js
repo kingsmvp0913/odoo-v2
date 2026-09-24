@@ -38,12 +38,16 @@ test('內部公司 → 平台訂閱（即使它也有 key）', async () => {
   expect(await auth.buildClaudeAuthEnv(5)).toEqual({ CLAUDE_CODE_OAUTH_TOKEN: PLATFORM });
 });
 
-test('客戶公司有自己的 key → 用客戶的，而且只回這一把', async () => {
+// 2026-09-24 裁決：客戶存的也是訂閱 token（`claude setup-token`），不是按量計費的 API key
+//（使用者原話：「全部都要走 CLAUDE_CODE_OAUTH_TOKEN」「API 我玩不起」）。
+test('客戶公司有自己的憑證 → 用客戶的，而且只回這一把', async () => {
   mockQuery = async () => ({ rows: [{ company_id: 2, is_internal: false, anthropic_key_enc: 'enc-cust' }] });
   const env = await auth.buildClaudeAuthEnv(9);
-  expect(env).toEqual({ ANTHROPIC_API_KEY: '解密(enc-cust)' });
-  // 兩把都給的話，實際生效的是哪一把要靠讀者記得官方優先序——那是留給未來的人踩的坑。
-  expect(`有沒有夾帶平台那把: ${'CLAUDE_CODE_OAUTH_TOKEN' in env}`).toBe('有沒有夾帶平台那把: false');
+  expect(env).toEqual({ CLAUDE_CODE_OAUTH_TOKEN: '解密(enc-cust)' });
+  // ⚠ CLAUDE_CODE_OAUTH_TOKEN 是官方優先序裡**最低**的。夾帶任一把 ANTHROPIC_* 進來，
+  // 客戶這把就會被無聲蓋掉，而症狀是「客戶設了憑證、帳卻記在別人頭上」。
+  expect(`有沒有夾帶會蓋掉它的變數: ${'ANTHROPIC_API_KEY' in env || 'ANTHROPIC_AUTH_TOKEN' in env}`)
+    .toBe('有沒有夾帶會蓋掉它的變數: false');
 });
 
 // ⚠ 這是整支函式最重要的一條。靜默退回平台＝廠商替客戶付錢，而且不會報錯，

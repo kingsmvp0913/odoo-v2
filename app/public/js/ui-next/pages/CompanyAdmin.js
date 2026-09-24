@@ -24,7 +24,7 @@
     // 客戶的 Anthropic key（2026-09-24 裁決「兩邊都要能填」）。與 GIT 憑證分開一頁而不是
     // 併進去：兩者是不同家的憑證（GIT 是我們連客戶 repo 用的，這把是客戶自己付錢的），
     // 放同一頁會讓人以為清除其中一個會連帶影響另一個。
-    { key: "apikey", label: "客戶 API key" },
+    { key: "apikey", label: "客戶 Claude 憑證" },
   ];
 
   window.UiNextCompanyAdminView = Vue.defineComponent({
@@ -359,7 +359,7 @@
       },
 
       async saveKey() {
-        if (!this.keyForm.api_key) return showToast("請貼上 API key", "error");
+        if (!this.keyForm.api_key) return showToast("請貼上 Claude 認證憑證", "error");
         this.savingKey = true;
         this.keyError = "";
         try {
@@ -369,7 +369,7 @@
           await this.refreshSelectedFromList();
           // warning＝存進去了但沒驗成功（例如 API 過載）。這要講出來，不能當成單純成功——
           // 「已儲存」與「已儲存且驗過」對使用者是兩件事。
-          showToast(r && r.warning ? r.warning : "已更新客戶 API key", r && r.warning ? "error" : "success");
+          showToast(r && r.warning ? r.warning : "已更新客戶的 Claude 憑證", r && r.warning ? "error" : "success");
         } catch (e) {
           // 後端的訊息會分辨「key 無效已擋下」與「存了但沒驗成功」，原文顯示
           this.keyError = e.message || "儲存失敗";
@@ -380,8 +380,8 @@
 
       async clearKey() {
         const ok = await confirmDialog({
-          title: "清除客戶 API key？",
-          message: `確定清除「${this.selected.name}」的 Anthropic API key？清除後這家公司的 AI 會直接跑不起來（不會改用平台的訂閱）。`,
+          title: "清除客戶的 Claude 憑證？",
+          message: `確定清除「${this.selected.name}」的 Claude 認證憑證？清除後這家公司的 AI 會直接跑不起來（不會改用平台的訂閱）。`,
           danger: true,
           confirmText: "清除",
         });
@@ -392,7 +392,7 @@
           this.keyForm = { api_key: "" };
           this.keyError = "";
           await this.refreshSelectedFromList();
-          showToast("已清除客戶 API key", "success");
+          showToast("已清除客戶的 Claude 憑證", "success");
         } catch (e) {
           showToast(e.message || "清除失敗", "error", 0);
         } finally {
@@ -432,7 +432,7 @@
           <header class="ui-next-page-head">
             <div>
               <h1>公司管理</h1>
-              <p>建立與管理客戶公司——基本資料、功能開關、綁定的專案、GIT 憑證、客戶 API key。</p>
+              <p>建立與管理客戶公司——基本資料、功能開關、綁定的專案、GIT 憑證、客戶的 Claude 憑證。</p>
             </div>
             <button class="btn btn-primary btn-sm" @click="createOpen = true">＋ 新增公司</button>
           </header>
@@ -660,11 +660,11 @@
           <!-- 客戶自己付錢的 Anthropic key。版面照抄同頁的「GIT 憑證」：同一類東西
                （只存不回、有「已設定」旗標、可清除），沿用既有 class 才不會長出第二套樣式。 -->
           <section v-show="tab==='apikey'" class="ui-next-panel">
-            <h2>客戶 API key</h2>
+            <h2>客戶的 Claude 認證憑證</h2>
             <!-- 內部公司不畫表單：後端也會擋（存了也永遠不會被用到），這裡先講清楚原因，
                  不要讓人填完按下去才看到錯誤。 -->
             <p v-if="selected.is_internal" class="ui-next-field-note">
-              內部公司用平台的訂閱執行 AI，不需要、也不會使用自己的 API key。
+              內部公司用平台的訂閱執行 AI，不需要、也不會使用自己的憑證。
             </p>
             <template v-else>
               <p>
@@ -672,23 +672,23 @@
                 <span class="pill" :class="selected.has_anthropic_key ? 'pill-success' : 'pill-warn'">{{ selected.has_anthropic_key ? '已設定' : '未設定' }}</span>
               </p>
               <p class="ui-next-field-note">
-                這是<strong>客戶自己</strong>的 Anthropic key，AI 用量直接算在客戶頭上。儲存前後端會拿這把候選 key 實跑一次 AI 驗證，可能需要幾秒到一分鐘；後端從不回傳密文，改 key 要重新貼完整的一把。客戶管理員也可以自己在「公司帳號」頁更換。
+                這是<strong>客戶自己</strong>的 Claude 訂閱憑證（在客戶的電腦上跑 <code>claude setup-token</code> 產生，<strong>不是</strong> Console 開的按量計費 API key），AI 用量直接算在客戶的訂閱上。儲存前後端會拿這把候選憑證實跑一次 AI 驗證，可能需要幾秒到一分鐘；後端從不回傳密文，要更換請重新貼完整的一把。客戶管理員也可以自己在「公司帳號」頁更換。
               </p>
               <p class="ui-next-field-note">
                 沒有設定（或清除）時，這家公司的 AI 會直接跑不起來，<strong>不會</strong>改用平台的訂閱。
               </p>
               <div class="conn-fields">
                 <div class="field-item">
-                  <label class="field-label">Anthropic API key</label>
-                  <input v-model="keyForm.api_key" type="password" class="field-input" placeholder="重新貼上完整的 key 才會更新" />
+                  <label class="field-label">Claude 認證憑證</label>
+                  <input v-model="keyForm.api_key" type="password" class="field-input" placeholder="重新貼上完整的憑證才會更新" />
                 </div>
               </div>
               <!-- 常駐紅色區塊而不是 toast：後端會分辨「key 無效已擋下」與「存了但沒驗成功」，
                    那兩句話是使用者唯一能據以判斷下一步的線索（同 gitError）。 -->
               <div v-if="keyError" class="error-msg">{{ keyError }}</div>
               <div class="ui-next-panel-actions">
-                <button class="btn btn-primary btn-sm" :disabled="savingKey" @click="saveKey">{{ savingKey ? '驗證並儲存中…' : '設定／更新 API key' }}</button>
-                <button v-if="selected.has_anthropic_key" class="btn btn-outline btn-sm" :disabled="clearingKey" @click="clearKey">{{ clearingKey ? '清除中…' : '清除 API key' }}</button>
+                <button class="btn btn-primary btn-sm" :disabled="savingKey" @click="saveKey">{{ savingKey ? '驗證並儲存中…' : '設定／更新憑證' }}</button>
+                <button v-if="selected.has_anthropic_key" class="btn btn-outline btn-sm" :disabled="clearingKey" @click="clearKey">{{ clearingKey ? '清除中…' : '清除憑證' }}</button>
               </div>
             </template>
           </section>

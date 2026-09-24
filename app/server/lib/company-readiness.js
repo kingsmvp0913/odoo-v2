@@ -22,7 +22,7 @@ const STEPS = [
   { key: 'git', label: '已設定公司 GIT 憑證', hint: '在「GIT 憑證」分頁填入 PAT' },
   { key: 'infra', label: 'repo、資料庫連線、正式機部署目標都有了', hint: '到該專案的設定頁補齊' },
   { key: 'testenv', label: '已建立測試區', hint: '到該專案的環境頁建立測試區' },
-  { key: 'apikey', label: '客戶的 Anthropic API key 已設定', hint: '在「客戶 API key」分頁代填，或請客戶管理員自己到「公司帳號」頁填' },
+  { key: 'apikey', label: '客戶的 Claude 認證憑證已設定', hint: '在「客戶 Claude 憑證」分頁代填，或請客戶管理員自己到「公司帳號」頁填' },
   { key: 'firsttask', label: '已用一張任務走通整條流程', hint: '用一張小任務跑完開發到上正式，確認通了再交給客戶' },
 ];
 

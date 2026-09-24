@@ -97,16 +97,18 @@ describe('prepareSandboxRun', () => {
     expect(rt.activeRunCount()).toBe(0);
   });
 
-  // 客戶公司：解析回 API key 就該照跑，不可以因為「沒有 OAuth token」被擋下——
-  // 那正是接線前的硬擋，也是這一塊要拆掉的東西。
-  test('客戶公司只有 API key → 照跑，且容器 env 裡沒有平台那把', async () => {
-    const { d } = deps({ buildClaudeAuthEnv: async () => ({ ANTHROPIC_API_KEY: 'sk-cust' }) });
+  // 2026-09-24 裁決：客戶存的也是訂閱 token，與平台同一個變數名。
+  // 這條現在守的是「客戶那把真的被用上，而且沒有任何會蓋掉它的變數混進容器」。
+  test('客戶公司的憑證照跑，且容器裡沒有會蓋掉它的 ANTHROPIC_*', async () => {
+    const { d } = deps({ buildClaudeAuthEnv: async () => ({ CLAUDE_CODE_OAUTH_TOKEN: 'sk-cust' }) });
     const run = await sr.prepareSandboxRun({ claudeArgs: ARGS, opts: { agentType: 'qa' }, profile: profileFor('qa'), projectId: 7 }, d);
     const envArgs = run.argv.join(' ');
-    // 憑證走 SECRET_ENV_KEYS：argv 只出現鍵名、值由 childEnv 傳，否則 ps 看得到客戶的 key。
-    expect(`argv 只帶鍵名: ${envArgs.includes('-e ANTHROPIC_API_KEY') && !envArgs.includes('sk-cust')}`).toBe('argv 只帶鍵名: true');
-    expect(`值走 childEnv: ${run.childEnv.ANTHROPIC_API_KEY}`).toBe('值走 childEnv: sk-cust');
-    expect(`夾帶平台那把: ${'CLAUDE_CODE_OAUTH_TOKEN' in run.childEnv}`).toBe('夾帶平台那把: false');
+    // 憑證走 SECRET_ENV_KEYS：argv 只出現鍵名、值由 childEnv 傳，否則 ps 看得到客戶的憑證。
+    expect(`argv 只帶鍵名: ${envArgs.includes('-e CLAUDE_CODE_OAUTH_TOKEN') && !envArgs.includes('sk-cust')}`).toBe('argv 只帶鍵名: true');
+    expect(`值走 childEnv: ${run.childEnv.CLAUDE_CODE_OAUTH_TOKEN}`).toBe('值走 childEnv: sk-cust');
+    // ⚠ CLAUDE_CODE_OAUTH_TOKEN 優先序最低，這兩把任一混進來就會讓客戶那把靜靜失效
+    expect(`夾帶會蓋掉它的變數: ${'ANTHROPIC_API_KEY' in run.childEnv || 'ANTHROPIC_AUTH_TOKEN' in run.childEnv}`)
+      .toBe('夾帶會蓋掉它的變數: false');
     await run.release();
   });
 

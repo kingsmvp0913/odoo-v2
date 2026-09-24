@@ -28,16 +28,16 @@ class CompanyKeyError extends Error {
 async function setCompanyAnthropicKey({ companyId, apiKey, actorUserId }, deps = {}) {
   const query = deps.query || require('../db').query;
   const key = typeof apiKey === 'string' ? apiKey.trim() : apiKey;
-  if (!key) throw new CompanyKeyError(400, '請貼上 Anthropic API key');
+  if (!key) throw new CompanyKeyError(400, '請貼上 Claude 認證憑證');
   // 沒有 APP_SECRET 就加密不了。存明文比不存更糟，所以這裡是硬擋。
-  if (!process.env.APP_SECRET) throw new CompanyKeyError(500, '伺服器未設定 APP_SECRET，無法安全存放 key');
+  if (!process.env.APP_SECRET) throw new CompanyKeyError(500, '伺服器未設定 APP_SECRET，無法安全存放憑證');
 
   const { rows: co } = await query('SELECT id, is_internal FROM companies WHERE id = $1', [companyId]);
   if (!co.length) throw new CompanyKeyError(404, '找不到這家公司');
   // 內部公司用平台的訂閱付錢（companies.is_internal 的欄位註解），不該有自己的 key。
   // 擋下來而不是照存：存了也永遠不會被用到，只會讓人以為設定生效了。
   if (co[0].is_internal === true) {
-    throw new CompanyKeyError(400, '內部公司用平台的訂閱執行 AI，不需要也不會使用自己的 API key');
+    throw new CompanyKeyError(400, '內部公司用平台的訂閱執行 AI，不需要也不會使用自己的憑證');
   }
 
   let warning = null;
@@ -51,11 +51,13 @@ async function setCompanyAnthropicKey({ companyId, apiKey, actorUserId }, deps =
       // 會擋下漏帶的呼叫。憑證本身由這裡的 env 覆寫決定，與 userId 解析出來的那把無關——
       // 所以這裡不會驗到平台那把。
       await runClaude('回覆 ok', {
-        env: { ANTHROPIC_API_KEY: key }, timeoutMs: 60000, agentType: 'auth_probe', userId: actorUserId,
+        // 客戶存的是訂閱 token，不是 API key（2026-09-24 裁決）。變數名寫錯的話
+        // 這裡會驗到平台那把而不是候選這把——等於沒驗，而且一定「通過」。
+        env: { CLAUDE_CODE_OAUTH_TOKEN: key }, timeoutMs: 60000, agentType: 'auth_probe', userId: actorUserId,
       });
     } catch (err) {
       if (err.claudeStatus === 'auth' || looksLikeAuthFailure(err.message)) {
-        throw new CompanyKeyError(400, 'API key 無效或已撤銷，未儲存');
+        throw new CompanyKeyError(400, '憑證無效或已撤銷，未儲存');
       }
       warning = `已儲存，但驗證未能完成：${err.message}`;
     }

@@ -135,8 +135,8 @@ async function prepareSandboxRun({ claudeArgs, opts = {}, profile, projectId }, 
 
   const infra = await d.ensureAgentInfra();
   const callerEnv = opts.env || {};
-  // 階段 3：這一次的錢算誰的由 buildClaudeAuthEnv 決定——客戶公司用自己的 ANTHROPIC_API_KEY，
-  // 內部／平台管理員／系統觸發用平台訂閱的 CLAUDE_CODE_OAUTH_TOKEN。它只會回**一把**。
+  // 階段 3：這一次的錢算誰的由 buildClaudeAuthEnv 決定——客戶公司用自己的訂閱憑證，
+  // 內部／平台管理員／系統觸發用平台的。兩者都是 CLAUDE_CODE_OAUTH_TOKEN，它只會回**一把**。
   // 非同步只發生在這裡：claude-auth.js 檔頭寫明讀取端必須同步（runClaude 若改成 await 查 DB，
   // spawn 會晚一個 microtask，既有測試多是「呼叫後同步對 mock child 發事件」，會整片失效）。
   // prepareSandboxRun 本來就是 async 且手上有 opts.userId，所以解析放這裡不違反那條。
@@ -148,17 +148,18 @@ async function prepareSandboxRun({ claudeArgs, opts = {}, profile, projectId }, 
   // 兩種憑證都要能被呼叫端覆寫，而且**覆寫時只留那一把**：存檔前的驗證一定要驗到候選憑證
   // 本人，否則等於沒驗。兩把並存時實際生效的是哪一把取決於官方優先序
   //（ANTHROPIC_API_KEY > CLAUDE_CODE_OAUTH_TOKEN），會驗到錯的那把而且不會有任何徵狀。
-  if (callerEnv.CLAUDE_CODE_OAUTH_TOKEN) {
-    // 平台管理員存新的訂閱 token 前的驗證（admin-routes.js 的 saveClaudeToken）。
-    auth.CLAUDE_CODE_OAUTH_TOKEN = callerEnv.CLAUDE_CODE_OAUTH_TOKEN;
-    delete auth.ANTHROPIC_API_KEY;
-  } else if (callerEnv.ANTHROPIC_API_KEY) {
-    // 公司管理員存自家 API key 前的驗證。
-    auth.ANTHROPIC_API_KEY = callerEnv.ANTHROPIC_API_KEY;
-    delete auth.CLAUDE_CODE_OAUTH_TOKEN;
-  }
-  if (!auth.CLAUDE_CODE_OAUTH_TOKEN && !auth.ANTHROPIC_API_KEY) {
-    throw new Error('容器模式需要一把 Anthropic 憑證：平台管理員在設定頁存入 Claude token，或客戶公司設定自己的 API key');
+  // 2026-09-24 裁決「全部都要走 CLAUDE_CODE_OAUTH_TOKEN」：平台訂閱與客戶自己的都是
+  // `claude setup-token` 產生的訂閱憑證，不是按量計費的 API key。兩邊同一個變數名之後，
+  // 覆寫只剩一種形狀——呼叫端指定了就用它那把（存檔前的驗證一定要驗到候選憑證本人）。
+  if (callerEnv.CLAUDE_CODE_OAUTH_TOKEN) auth.CLAUDE_CODE_OAUTH_TOKEN = callerEnv.CLAUDE_CODE_OAUTH_TOKEN;
+  // ⚠ CLAUDE_CODE_OAUTH_TOKEN 是官方優先序裡**最低**的一個
+  //（ANTHROPIC_AUTH_TOKEN > ANTHROPIC_API_KEY > CLAUDE_CODE_OAUTH_TOKEN）。
+  // 這兩把只要有一把混進容器，上面那把就會被無聲蓋掉，而症狀是「客戶設了自己的憑證，
+  // 帳卻記在別人頭上」——不會報錯。所以在這裡硬刪，不倚賴呼叫端自律。
+  delete auth.ANTHROPIC_API_KEY;
+  delete auth.ANTHROPIC_AUTH_TOKEN;
+  if (!auth.CLAUDE_CODE_OAUTH_TOKEN) {
+    throw new Error('容器模式需要一把 Claude 認證憑證：平台管理員在設定頁存入，或客戶公司在「公司帳號」頁設定自己的');
   }
 
   // 家目錄要同時分專案與分公司（lib/agent-home.js）：同一個專案可以綁給不只一家公司，
