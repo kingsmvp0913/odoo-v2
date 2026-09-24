@@ -229,13 +229,6 @@ const router = createRouter({
       meta: { requiresAuth: true, requiresFeature: "exam" },
     },
     {
-      // 產品化規格頁：只有 ui-next 版本（理由同上）。內容是內部規劃文件，
-      // 入口按鈕、這條路由、後端 /api/docs/saas-specs 三處都限管理員（rules/frontend.md 38）。
-      path: "/saas-specs",
-      component: window.UiNextSaasSpecsView,
-      meta: { requiresAuth: true, requiresAdmin: true },
-    },
-    {
       // 公司管理員的「公司帳號」頁。只有 ui-next 版本——legacy 不需要維護新頁面。
       // 這頁公司管理員與平台管理員都能進，所以不掛 requiresAdmin（會擋掉公司管理員），
       // 也不另外發明 requiresCompanyAdmin 這個 meta 旗標——只有這一個頁面用得到，

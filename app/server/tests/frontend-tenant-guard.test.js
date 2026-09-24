@@ -3,7 +3,8 @@
 // 驗收靠的是人工開瀏覽器看。人工驗收不會在半年後有人改 nav 或 route 表時重跑，
 // 所以這一支把當時每一個「藏起來」的決定釘成靜態斷言：忘記了會直接紅燈，而不是無聲放回去。
 //
-// 手法沿用 frontend-admin-route-guard.test.js 與 frontend-saas-specs.test.js：
+// 手法沿用 frontend-admin-route-guard.test.js（原本還有一支 frontend-saas-specs.test.js，
+// 2026-09-24 隨產品化規格頁一起刪掉）：
 // 讀原始碼字面、用正則切片比對。不 require app.js／UiNextApp.js——它們依賴 Vue、VueRouter
 // 等瀏覽器全域，在 node 環境載不起來。
 //
@@ -182,11 +183,13 @@ describe('ui-next 外殼：受限入口都帶著條件（不是裸露的）', ()
   // 2026-09-22 再由 8 改為 9：新增「平台更版」（/admin/release，階段 5 Task 6）。
   // 2026-09-22 同日又回到 8：使用者裁決取消「平台更版」這一頁（更版是改善流程的最後一步，
   // 併回 /admin/feedback／/admin/settings／/admin 首頁），那顆入口跟著刪掉。
-  // 數字一樣是從模板重數的八顆：提意見／進行中 Pipeline／用量報表／架構圖／流程圖／
-  // 產品化規格／ODOO認證輔助／新手教學。
+  // 2026-09-24 由 8 改為 7：產品化收尾，使用者裁決把「產品化規格」整個拿掉（那一頁唯一的
+  // 用途是給他看進度，做完就是一塊沒人維護的死內容，留著只會讓下一個人以為那是現行文件）。
+  // 數字一樣是從模板重數的七顆：提意見／進行中 Pipeline／用量報表／架構圖／流程圖／
+  // ODOO認證輔助／新手教學。
   test('「更多工具」選單切得到，項目數量沒變', () => {
     expect(toolsMenu).not.toBe('');
-    expect(toolsMenu.match(/<button[^>]*>/g) || []).toHaveLength(8);
+    expect(toolsMenu.match(/<button[^>]*>/g) || []).toHaveLength(7);
   });
 
   // Task 1 之前這三顆是裸露的：一般使用者看得到、按下去必定 403。

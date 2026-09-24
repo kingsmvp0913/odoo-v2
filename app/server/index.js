@@ -26,7 +26,6 @@ const { registerRoutes: registerPortPoolRoutes } = require('./port-pool-routes')
 const { registerRoutes: registerEnterpriseRoutes } = require('./enterprise-routes');
 const { registerRoutes: registerSearchRoutes } = require('./search-routes');
 const { registerRoutes: registerDeployRoutes } = require('./deploy-routes');
-const { registerRoutes: registerDocsRoutes } = require('./docs-routes');
 const { registerRoutes: registerAiPlatformRoutes } = require('./ai-platform-routes');
 const { registerRoutes: registerCompanyAdminRoutes } = require('./company-admin-routes');
 const { registerRoutes: registerCompanyRoutes } = require('./company-routes');
@@ -232,7 +231,6 @@ function createApp() {
   registerAdminRoutes(app);
   registerTeamsRoutes(app);
   registerTokenReportRoutes(app);
-  registerDocsRoutes(app);
   registerClaudeUsageRoutes(app);
   registerDbQueryRoutes(app);
   registerPortPoolRoutes(app);
