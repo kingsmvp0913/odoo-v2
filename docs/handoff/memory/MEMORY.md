@@ -94,8 +94,7 @@
 - [跑測試清空真 nginx conf](tests-wipe-real-nginx-conf.md) — 已修 0926168e；零錯誤不是證據
 - [TLS alert 46＋收容站翻 AICEO](testenv-tls-alert46-fallback-vhost.md) — 握手就拒絕，log 全查不到
 - [AI 查不到資料庫＝socket 被無聲奪走](ai-socket-silently-stolen.md) — 第二份平台程式跑一秒就永久搶走；ss 顯示 LISTEN 不代表通；切回 internal 可立即止血
-- [產品化走 SaaS 多租戶](productize-saas-decision.md) — **從開頭「09-17 進度」接**：開關 internal、實測通過；master=6b916f48（D1＋D2）待重啟；明早查夜間改善容器結果，再開 projects
-- [規格做完要標註並重產網頁](spec-progress-annotation.md) — 使用者只從平台網頁看進度；改 §0 進度表→跑 build-specs-page.js→複製到 docs/
+- [產品化已結案，規格頁已刪](productize-saas-decision.md) — 09-24 程式收尾；規格原文只剩 git 歷史（`git show 250fb83a:docs/superpowers/specs/…`）；第一家客戶與合約使用者明說不做
 - [全跑通過數可以算準](full-run-test-count-model.md) — 新測試數＋每個新原始碼檔 +1（全樹守衛）；**全跑進行中改測試檔會污染結果**
 - [共用主機不得影響別人](shared-host-do-no-harm.md) — 111 個容器只有 2 個是本平台；**任何 docker prune 一律禁止**，只碰自己前綴
 - [登入失敗鎖定](login-attempt-lockout.md) — 鎖「帳號＋來源」不是帳號（只鎖帳號會被拿來把全部管理員鎖死）；未合併未重啟
