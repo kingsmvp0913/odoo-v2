@@ -132,6 +132,10 @@ function restoreHandoff({ root, home = os.homedir(), deps = {} } = {}) {
   const skillsCopied = copyMissing(path.join(claudeHome, 'skills'), path.join(claudeDest, 'skills'));
   if (skillsCopied) steps.push({ name: '全域 skills', status: 'done', detail: `補上 ${skillsCopied} 檔` });
 
+  // rtk 的個人設定（過濾規則、顯示偏好）跟著走，否則新機器的輸出過濾行為與舊機器不同。
+  const rtkCopied = copyMissing(path.join(handoffDir, 'rtk-config'), path.join(home, '.config', 'rtk'));
+  if (rtkCopied) steps.push({ name: 'rtk 設定', status: 'done', detail: `補上 ${rtkCopied} 檔 → ~/.config/rtk` });
+
   const settingsSrc = path.join(claudeHome, 'settings.json');
   if (fs.existsSync(settingsSrc)) {
     const incoming = JSON.parse(fs.readFileSync(settingsSrc, 'utf8'));

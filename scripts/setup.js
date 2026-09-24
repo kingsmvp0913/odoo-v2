@@ -11,6 +11,7 @@ const { ensureClaudeEnv } = require('./lib/claude-env');
 const { ensureCodexCli } = require('./lib/codex-env');
 const { verifyRuntimeDeps } = require('./lib/checks');
 const { restoreHandoff } = require('./lib/handoff');
+const { ensureRtk } = require('./lib/rtk');
 const { verifyDocker, ensureGatewayImage, ensureAgentImage } = require('./lib/docker');
 
 const ROOT = path.resolve(__dirname, '..');
@@ -66,6 +67,10 @@ async function main() {
 
   ensureCodexCli();
   console.log('[OK] Codex CLI 已就緒');
+
+  // 一定要排在接手包之前：接手包會偵測 rtk 在不在，決定要不要寫入那條 Bash hook。
+  const rtk = ensureRtk();
+  console.log(`[${rtk.status === 'done' ? 'OK' : rtk.status === 'failed' ? 'WARN' : 'SKIP'}] rtk：${rtk.detail}`);
 
   // 排在 Claude 環境之後：登入流程會先把 ~/.claude 建出來，設定才有地方合併。
   for (const step of restoreHandoff({ root: ROOT }).steps) {

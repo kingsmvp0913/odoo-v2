@@ -41,6 +41,14 @@ describe('restoreHandoff', () => {
     expect(steps.find((s) => s.name === '開發記憶').status).toBe('skipped');
   });
 
+  test('rtk 的個人過濾設定跟著走——少了它新機器的輸出過濾行為與舊機器不同', () => {
+    const root = makeRepo({ 'docs/handoff/rtk-config/filters.toml': 'max_lines = 40' });
+
+    restoreHandoff({ root, home, deps: withRtk });
+
+    expect(fs.readFileSync(path.join(home, '.config', 'rtk', 'filters.toml'), 'utf8')).toBe('max_lines = 40');
+  });
+
   test('settings.json 只補缺鍵，既有的本機專屬設定不被洗掉', () => {
     const root = makeRepo({
       'docs/handoff/claude-home/settings.json': JSON.stringify({ model: 'opus[1m]', theme: 'dark' }),

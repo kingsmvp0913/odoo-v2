@@ -14,7 +14,7 @@ git clone <repo> odoo-v2 && cd odoo-v2
 
 `install.sh` → `scripts/setup.js` 會依序處理：系統套件（Node 20／Git／Python3／Chrome／
 PostgreSQL／xmllint／Docker）→ `data/config.json` → 建 DB role/db → `npm install` →
-Claude Code CLI 與訂閱登入 → 5 個官方 plugin → Codex CLI → VPN Gateway 與 AI 沙盒映像 →
+Claude Code CLI 與訂閱登入 → 5 個官方 plugin → Codex CLI → **rtk** → VPN Gateway 與 AI 沙盒映像 →
 **接手包還原**（本目錄）→ 啟動平台。
 
 接手包還原這一步做的事（`scripts/lib/handoff.js`）：
@@ -23,16 +23,22 @@ Claude Code CLI 與訂閱登入 → 5 個官方 plugin → Codex CLI → VPN Gat
 |------|------|
 | `memory/` — 114 則平台開發記憶 | `~/.claude/projects/<repo 路徑 slug>/memory/` |
 | `claude-home/CLAUDE.md`、`RTK.md` | `~/.claude/` |
-| `claude-home/skills/graphify` | `~/.claude/skills/` |
+| `rtk-config/` — rtk 的過濾與顯示設定 | `~/.config/rtk/` |
 | `claude-home/settings.json` | 合併進 `~/.claude/settings.json` |
+
+> 接手包**不帶 graphify skill**：平台的 graphify 自動索引 2026-08-08 已移除，`install.sh` 也不裝
+> `graphify` CLI，帶過去只會得到一個一跑就找不到執行檔的指令。要用就自己
+> `pip install graphifyy networkx --user --break-system-packages`（PEP 668 環境需要後兩個旗標）。
 
 三個刻意的行為，不是 bug：
 
 - **只補不覆蓋**。新機器上已存在的記憶與設定一概不動——覆蓋會把後來更新過的事實打回快照當時的舊版。
 - **記憶目錄名自動推導**。Claude Code 依工作目錄分存記憶，slug 是 repo 絕對路徑把分隔符換成 `-`
   （`/home/odoo/odoo-v2` → `-home-odoo-odoo-v2`）。clone 到別的路徑不必手改。
-- **本機沒有 `rtk` 時不寫入那條 hook**。寫了會讓之後每一次 Bash 呼叫都去跑一個不存在的指令。
-  `rtk` 是獨立安裝的 9.8MB 二進位、不在本 repo；裝好後重跑 `node scripts/setup.js --skip-start` 補上。
+- **`rtk` 裝不起來時不寫入那條 hook**。寫了會讓之後每一次 Bash 呼叫都去跑一個不存在的指令。
+  `rtk` 不在本 repo，由 `scripts/lib/rtk.js` 從官方 release（`github.com/rtk-ai/rtk`）抓預編譯檔放進
+  `~/.local/bin`；Windows 沒有官方預編譯檔，會印連結後跳過。裝好後重跑
+  `node scripts/setup.js --skip-start` 就會把 hook 補上。
 
 ## 安裝腳本做不到、必須人工補的
 
