@@ -12,16 +12,21 @@
 # - 不裝 rtk、不帶任何使用者層外掛或設定；以 --user <宿主 uid:gid> 執行（見 lib/agent-sandbox.js）
 ARG NODE_IMAGE=node:22-slim
 FROM ${NODE_IMAGE}
-ARG CLAUDE_CODE_VERSION
-ARG CONTEXT7_MCP_VERSION
 
-RUN test -n "$CLAUDE_CODE_VERSION" && test -n "$CONTEXT7_MCP_VERSION" \
-    && apt-get update \
+# 系統套件與 npm 套件刻意分兩層，且本層完全不引用任何 ARG——層的快取鍵含展開後的指令字串，
+# 一旦把 ${CLAUDE_CODE_VERSION} 寫進同一層，claude 每次自動升版都會連 188 個 apt 套件一起重跑
+# （實測十幾分鐘，而 start.sh 是同步等它，平台整段時間起不來）。拆開後升版只重跑下面那層。
+RUN apt-get update \
     && apt-get install -y --no-install-recommends git ripgrep curl ca-certificates \
          python3 python3-openpyxl python3-docx python3-xlrd \
          python3-reportlab python3-matplotlib python3-pil \
          fonts-arphic-uming fonts-noto-cjk \
-    && rm -rf /var/lib/apt/lists/* \
+    && rm -rf /var/lib/apt/lists/*
+
+# ARG 宣告放在套件層「之後」：ARG 值改變是從宣告處往下失效，宣告在最上面等於前面全部白拆。
+ARG CLAUDE_CODE_VERSION
+ARG CONTEXT7_MCP_VERSION
+RUN test -n "$CLAUDE_CODE_VERSION" && test -n "$CONTEXT7_MCP_VERSION" \
     && npm i -g "@anthropic-ai/claude-code@${CLAUDE_CODE_VERSION}" "@upstash/context7-mcp@${CONTEXT7_MCP_VERSION}" \
     && npm cache clean --force
 
