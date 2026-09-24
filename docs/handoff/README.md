@@ -60,9 +60,12 @@ Claude Code CLI 與訂閱登入 → 5 個官方 plugin → Codex CLI → **rtk**
 
 ```bash
 node scripts/lib/handoff.js --snapshot    # 把本機活記憶刷進 docs/handoff/memory/
-git add -f docs/handoff docs/superpowers  # docs/ 在 .gitignore，一定要 -f
+git add -f docs/handoff                    # docs/ 在 .gitignore，一定要 -f
 git commit && git push
 ```
+
+⚠ **只加 `docs/handoff`，不要 `git add -f docs/superpowers`**。那個目錄裡多數檔案是刻意不進版控的
+設計史料；`-f` 配上目錄會把十幾份未追蹤的文件一起拖進版控（2026-09-24 被數量閘門當場擋下一次）。
 
 快照會**排除客戶專案專屬的記憶**（代號清單在 `scripts/lib/handoff.js` 的
 `PROJECT_MEMORY_PREFIXES`），因為接手的是平台開發這件事，且本 repo 是公開的。
@@ -74,11 +77,12 @@ git commit && git push
    commit 禁用 `git add -A`、改 skills 要同步）
 2. `~/.claude/projects/<slug>/memory/MEMORY.md` — 記憶索引，每行一則，點進去看
 3. `AGENTS.md`、`DEPLOY.md`
-4. `docs/superpowers/specs/2026-09-11-productize-*.md` — 產品化總覽與分期計畫，**進行中的工作從這裡接**
-5. `.claude/skills/` 底下的 skill（查 DB、查 wiki、除錯任務、健檢…）
+4. `.claude/skills/` 底下的 skill（查 DB、查 wiki、除錯任務、健檢…）
 
-> 此 repo 的 `specs/` 放設計、`plans/` 放施工規格，與字面直覺相反。
-> 改完規格 §0 進度表要跑 `node docs/superpowers/specs/_page/build-specs-page.js`。
+> 產品化（多租戶 SaaS）已於 2026-09-24 結案，那批規格書與進度網頁一併刪除，**沒有替代路徑**；
+> 要回頭查當時的設計，去 git 歷史看 `250fb83a` 的 `docs/superpowers/specs/2026-09-11-productize-*.md`。
+> 各階段的施工規格仍在 `docs/superpowers/plans/`（此 repo 的 `specs/` 放設計、`plans/` 放施工規格，
+> 與字面直覺相反）。
 
 ## 注意
 
