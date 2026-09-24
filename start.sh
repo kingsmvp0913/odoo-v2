@@ -48,6 +48,13 @@ if [ -n "$_PORT" ]; then export PORT="$_PORT"; fi
 _PC="$(read_config PLATFORM_CONTAINER)"
 if [ -n "$_PC" ]; then export PLATFORM_CONTAINER="$_PC"; fi
 
+# 監聽位址（選用）：index.js 預設只聽 127.0.0.1（commit 9a8f7c3f 的安全收斂）。本容器走 host 網路，
+# 那等於 bridge 網路上的 nginx 連不進來、整站 502——而症狀要到下一次重啟才浮現，極難聯想。
+# 放 config.json 而非 docker-compose.yml，理由同 PLATFORM_CONTAINER：upgrade.sh 只 docker restart、
+# 不重建容器，compose 的環境變數改了不會生效。填 docker0 位址即可，不必退回聽所有介面。
+_BH="$(read_config BIND_HOST)"
+if [ -n "$_BH" ]; then export BIND_HOST="$_BH"; fi
+
 # 信任的反向代理（選用，逗號分隔的完整 IP）：登入失敗鎖定只在直連對方是這些位址時才採用 X-Real-IP 當來源
 # （lib/login-guard.js clientSource）。沒設就一律用直連位址——經 nginx 的使用者會共用同一個來源。
 _TP="$(read_config TRUSTED_PROXY_IPS)"
