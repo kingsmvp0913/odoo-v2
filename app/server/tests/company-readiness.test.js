@@ -167,3 +167,29 @@ describe('端點', () => {
     expect((await request(app).get(`/api/admin/companies/${coId}/readiness`)).status).toBe(401);
   });
 });
+
+// 失控保險絲的預設值（2026-09-24 使用者拍板 50）。它不是帳單上限——客戶用訂閱憑證、
+// 不會被按量扣款——而是「這張任務燒得不合理，停下來讓人看一眼」。
+// 依據：185 張真實任務的 p99 是 $27.69、史上最貴 $31.97，所以 50 不會誤擋正常工作。
+describe('新客戶公司的任務花費上限預設值', () => {
+  test('沒帶就給 50，不是留空（留空＝沒有任何保險絲）', async () => {
+    const res = await request(app).post('/api/admin/companies').set(as(adminToken)).send({ name: '預設值測試' });
+    expect(res.status).toBe(201);
+    const row = await one('SELECT task_budget_usd FROM companies WHERE id=$1', [res.body.id]);
+    expect(Number(row.task_budget_usd)).toBe(50);
+  });
+
+  test('明確帶 null → 尊重呼叫端，停用上限', async () => {
+    const res = await request(app).post('/api/admin/companies')
+      .set(as(adminToken)).send({ name: '不設上限測試', task_budget_usd: null });
+    expect(res.status).toBe(201);
+    const row = await one('SELECT task_budget_usd FROM companies WHERE id=$1', [res.body.id]);
+    expect(row.task_budget_usd).toBeNull();
+  });
+
+  test('帶了不合法的金額 → 400，不會默默用預設值蓋過去', async () => {
+    const res = await request(app).post('/api/admin/companies')
+      .set(as(adminToken)).send({ name: '壞金額測試', task_budget_usd: -5 });
+    expect(res.status).toBe(400);
+  });
+});

@@ -16,6 +16,9 @@ const { buildGitEnvFromPat } = require('./lib/git-identity');
 const { listRemoteBranchesByUrl } = require('./pipeline/git');
 const { abortCompanyTasks } = require('./pipeline/runner');
 const { validTaskBudgetUsd } = require('./lib/task-budget');
+
+// 新客戶公司的失控保險絲預設值（2026-09-24 使用者拍板）。依據見建立公司那支的註解。
+const DEFAULT_TASK_BUDGET_USD = 50;
 const { setCompanyAnthropicKey, clearCompanyAnthropicKey } = require('./lib/company-anthropic-key');
 const { companyReadiness } = require('./lib/company-readiness');
 
@@ -61,11 +64,21 @@ function registerRoutes(app) {
       const { name, is_active, active_from, active_until, features } = req.body || {};
       if (!name || !String(name).trim()) return res.status(400).json({ error: '缺公司名稱' });
       // is_internal 刻意不從 req.body 取：只有遷移腳本寫過它，API 一律建一般公司。
+      //
+      // task_budget_usd 給預設值（2026-09-24 使用者拍板 50）。它**不是帳單上限**——
+      // 客戶用的是訂閱憑證、不會被按量扣款——而是「這張任務燒得不合理，停下來讓人看一眼」
+      // 的失控保險絲。50 這個數字有依據：實測 185 張任務的中位數 $2.93、p90 $14.17、
+      // p99 $27.69、史上最貴 $31.97，所以 50 永遠不會誤擋正常工作，只攔真的跑瘋的迴圈。
+      // 呼叫端可以覆寫，帶 null 表示明確停用上限。
+      const budget = 'task_budget_usd' in (req.body || {}) ? req.body.task_budget_usd : DEFAULT_TASK_BUDGET_USD;
+      if (!validTaskBudgetUsd(budget)) {
+        return res.status(400).json({ error: '任務花費上限須為正數美元金額（最多小數兩位），或 null 表示停用' });
+      }
       const { rows } = await query(
-        `INSERT INTO companies (name, is_active, active_from, active_until, features)
-         VALUES ($1, $2, $3, $4, $5) RETURNING id`,
+        `INSERT INTO companies (name, is_active, active_from, active_until, features, task_budget_usd)
+         VALUES ($1, $2, $3, $4, $5, $6) RETURNING id`,
         [String(name).trim(), is_active === true, active_from || null, active_until || null,
-         JSON.stringify(normalizeFeatures(features))]
+         JSON.stringify(normalizeFeatures(features)), budget]
       );
       const { rows: out } = await query(`${listSql} WHERE c.id = $1`, [rows[0].id]);
       res.status(201).json(shape(out[0]));
