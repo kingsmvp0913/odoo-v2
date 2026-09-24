@@ -594,8 +594,13 @@ function registerRoutes(app) {
       if (!Number.isInteger(id)) return res.status(400).json({ error: 'id 不合法' });
       const up = (await query(
         `SELECT id, bank_id, page, status FROM exam_uploads WHERE id = $1`, [id])).rows[0];
-      if (!up) return res.status(404).json({ error: '找不到這一頁' });
-      if (!await ensureBankVisible(req, res, up.bank_id)) return;
+      // ⚠ 兩種情況必須走同一個分支、回同一句話：不存在的 id，與「存在但屬於別家公司」。
+      // 分兩段寫的話狀態碼一樣是 404，但訊息不同（找不到這一頁 vs 找不到題庫）——
+      // 訊息本身就成了 oracle，別家公司可以拿它把全平台的 upload id 掃出來
+      // （lib/exam/scope.js 的 ensureBankVisible 早就訂了這個門檻，這裡先前漏了）。
+      if (!up || !await canSeeBank(req.actor, up.bank_id)) {
+        return res.status(404).json({ error: '找不到這一頁' });
+      }
       if (up.status === 'running') {
         return res.status(409).json({ error: '這一頁正在跑，等它結束或先停掉再重試' });
       }
@@ -821,8 +826,10 @@ function registerRoutes(app) {
         `SELECT a.bank_id, i.official_from, i.answer_official
            FROM exam_attempts a JOIN exam_items i ON i.id=a.item_id WHERE a.id=$1`,
         [attemptId])).rows[0];
-      if (!attempt) return res.status(404).json({ error: '找不到這題' });
-      if (!await ensureBankVisible(req, res, attempt.bank_id)) return;
+      // 同 retry：不存在與看不到必須逐字相同，否則訊息就是 oracle（見該處註解）
+      if (!attempt || !await canSeeBank(req.actor, attempt.bank_id)) {
+        return res.status(404).json({ error: '找不到這題' });
+      }
       if (attempt.official_from && attempt.answer_official && attempt.answer_official.length) {
         return res.status(409).json({ error: '官方確認題已鎖定' });
       }

@@ -353,3 +353,27 @@ test('歸檔後作戰台只換成空畫面，不呼叫清空、不刪資料', ()
   // 畫面清空後，略過／矛盾的訊息仍要看得到
   expect(view).toContain('上一場已歸檔');
 });
+
+// 2026-09-24 實機驗收撞到的兩件事，都是「畫面看起來正常、按下去才知道壞了」那一類。
+describe('租戶隔離上線後的作戰台', () => {
+  // 規格 §1：客戶用得到考試，但不管理題庫。不掛條件的話客戶看得到「題庫」鈕，
+  // 按下去必定 403——入口存在但進不去，比沒有入口更糟。
+  test('「題庫」鈕只給內部看', () => {
+    const btn = view.match(/<button[^>]*\$router\.push\('\/exam-bank'\)[^>]*>/);
+    expect(btn).not.toBeNull();
+    expect(btn[0]).toContain('userStore.isInternal');
+  });
+
+  // 本頁沒有場次選擇器，看的永遠是「最新的那一場」。租戶隔離上線後 exam/banks 對內部
+  // 會回傳所有客戶的場次，不分的話內部同事打開作戰台看到的是客戶那場（0 題），自己
+  // 18 題的結果完全不見，而且頁面上沒有任何切換場次的方法。
+  // 判準必須用後端算好的 is_mine：前端手上沒有「我算不算內部」的同一份判準
+  //（scope.js 的 seesAllBanks 有「沒有公司 ⇒ 算內部」那條慣例），自創第二套一定分岔。
+  test('自動選的那一場要先挑自己這一邊的（is_mine）', () => {
+    // refresh() 很長且中途有 try/catch，抓到「下一個同層方法開始」為止最穩
+    const refresh = view.match(/async refresh\(\)[\s\S]*?(?=\n {4}(?:async )?\w+\()/);
+    expect(refresh).not.toBeNull();
+    expect(refresh[0]).toContain('is_mine');
+    expect(refresh[0]).not.toMatch(/const latest = open\.length \? open\[0\]\.id : null/);
+  });
+});

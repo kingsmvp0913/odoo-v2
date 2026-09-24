@@ -42,6 +42,7 @@ window.UiNextExamRunView = Vue.defineComponent({
   computed: {
     // 正式答案的勾只給管理員（server 端 PATCH /final 另外擋 403），其他人只能投票
     isAdmin() { return window.UserStore.role === 'admin'; },
+    userStore() { return window.UserStore; },
     uploadGroups() {
       const questions = new Map();
       for (const a of this.attempts) {
@@ -116,7 +117,11 @@ window.UiNextExamRunView = Vue.defineComponent({
         // （deduce.js）與章節校準都靠已歸檔場次的作答，刪了就再也推不出來。
         // 所以這裡只換畫面，資料一筆不動，題庫頁照樣看得到。
         const open = this.banks.filter(b => b.status !== 'archived');
-        const latest = open.length ? open[0].id : null;
+        // 先挑自己這一邊的（is_mine，後端算的）。租戶隔離上線後，內部這支會回傳所有客戶的
+        // 場次，不分的話「最新的那一場」就變成「全平台最後一個開場的客戶」——內部同事打開
+        // 作戰台看到的是客戶那場，自己的完全不見，而本頁沒有切換場次的方法。
+        // 退回 open[0] 是為了「自己這邊一場都沒有」時畫面不要整個空掉。
+        const latest = (open.find(b => b.is_mine) || open[0] || {}).id ?? null;
         if (latest !== this.bankId) {
           this.bankId = latest;
           // 歸檔面板的頁與草稿屬於上一場，留著會拿去對新的一場
@@ -478,7 +483,9 @@ window.UiNextExamRunView = Vue.defineComponent({
           <p>外部 POST 後自動審題；這裡只看結果、投票與最後答案。</p>
         </div>
         <div class="ui-next-head-tools">
-          <button @click="$router.push('/exam-bank')">題庫</button>
+          <!-- 題庫管理是內部的事（規格 §1：客戶用得到考試，但不管理題庫）。不掛條件的話
+               客戶看得到這顆鈕，按下去必定 403——入口存在但進不去，比沒有入口更糟。 -->
+          <button v-if="userStore.isInternal" @click="$router.push('/exam-bank')">題庫</button>
           <button :disabled="clearing || !stats.total" @click="clearAll">
             {{ clearing ? '清空中…' : '清空' }}
           </button>

@@ -30,13 +30,24 @@ function registerRoutes(app) {
     const scope = bankScopeClause(req.actor, 'b.company_id');
     const { rows } = await query(`
       SELECT b.id, b.label, b.odoo_version, b.status, b.taken_at, b.created_at, b.score_image,
-             COUNT(a.id)::int AS item_count
+             b.company_id, COUNT(a.id)::int AS item_count
         FROM exam_banks b
         LEFT JOIN exam_attempts a ON a.bank_id = b.id
        WHERE ${scope.sql}
-       GROUP BY b.id, b.label, b.odoo_version, b.status, b.taken_at, b.created_at, b.score_image
+       GROUP BY b.id, b.label, b.odoo_version, b.status, b.taken_at, b.created_at, b.score_image, b.company_id
        ORDER BY b.id DESC`, scope.params);
-    res.json(rows);
+    // is_mine＝這一場屬於看的人自己那一邊（內部看內部的、客戶看自家的）。
+    //
+    // 為什麼需要：作戰台沒有場次選擇器，開起來看的永遠是「最新的那一場」。租戶隔離上線後，
+    // 內部的這支開始回傳**所有客戶**的場次，於是「最新的那一場」變成「全平台最後一個開場
+    // 的客戶」——2026-09-24 實機驗收撞到：內部同事打開作戰台，看到的是客戶那場（0 題、
+    // 一列判題失敗），自己 18 題的結果完全不見，而且頁面上沒有任何切換場次的方法。
+    // 這正是 scope.js 檔頭警告的症狀（「內部同事的考試突然不見了」），從另一條路發生。
+    //
+    // 判斷放後端而不是讓前端比對 company_id：前端手上沒有「我算不算內部」的同一份判準
+    // （seesAllBanks 有「沒有公司 ⇒ 算內部」那條慣例），在前端自創第二套一定會分岔。
+    const mine = bankOwnerForActor(req.actor);
+    res.json(rows.map(r => ({ ...r, is_mine: (r.company_id ?? null) === mine })));
   });
 
   // 開一場新考試。

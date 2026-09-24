@@ -107,6 +107,20 @@ describe('場次清單只看得到自己的', () => {
     expect(await idsFor('a')).toEqual([bankA]);
     expect(await idsFor('b')).toEqual([bankB]);
   });
+
+  // 2026-09-24 實機驗收撞到的回歸：作戰台沒有場次選擇器，看的永遠是「最新的那一場」。
+  // 租戶隔離上線後內部開始看得到所有客戶的場次，於是「最新的那一場」變成「全平台最後一個
+  // 開場的客戶」——內部同事打開作戰台看到客戶那場（0 題），自己的完全不見，而頁面上沒有
+  // 任何切換場次的方法。判準必須是後端算的（前端沒有「我算不算內部」的同一份判準）。
+  const minesFor = async (who) => (await request(app).get('/api/exam/banks').set(as(tok[who])))
+    .body.filter((b) => b.is_mine).map((b) => b.id).sort();
+
+  test('is_mine：內部只認內部那場，客戶只認自家那場', async () => {
+    expect(await minesFor('admin')).toEqual([bankInternal]);
+    expect(await minesFor('internal')).toEqual([bankInternal]);
+    expect(await minesFor('a')).toEqual([bankA]);
+    expect(await minesFor('b')).toEqual([bankB]);
+  });
 });
 
 describe('拿別家的場次 id 打過去一律 404', () => {
@@ -271,5 +285,31 @@ describe('靜態守衛：新增端點不得漏接範圍檢查', () => {
 
   test.each(all.map((h) => [h.name, h.body]))('%s 有接上範圍檢查', (_name, body) => {
     expect(body).toMatch(GUARDS);
+  });
+});
+
+// 規格 §3.2 的門檻：「訊息也與『真的不存在』逐字相同，否則訊息本身就是那個 oracle」。
+// 狀態碼那一半早就守住了（上面「拿別家的場次 id 打過去一律 404」），訊息這一半
+// 2026-09-24 實機驗收才發現漏了兩支：它們先查中介實體、查不到回自己的訊息，查得到
+// 才過範圍檢查——於是「找不到這一頁」與「找不到題庫」的差別就把 id 存不存在講了出來。
+describe('訊息不得洩漏 id 是否存在（規格 §3.2）', () => {
+  test('retry：別家的 upload 與不存在的 upload，訊息逐字相同', async () => {
+    const { rows: [up] } = await dbModule.query(
+      "INSERT INTO exam_uploads (bank_id, page, image_path, status) VALUES ($1,'oracle1','x.jpg','done') RETURNING id", [bankB]);
+    const mine = await request(app).post(`/api/exam/uploads/${up.id}/retry`).set(as(tok.a)).send({});
+    const ghost = await request(app).post('/api/exam/uploads/99999999/retry').set(as(tok.a)).send({});
+    expect(`${mine.status} ${mine.body.error}`).toBe(`${ghost.status} ${ghost.body.error}`);
+    expect(mine.status).toBe(404);
+  });
+
+  test('vote：別家的 attempt 與不存在的 attempt，訊息逐字相同', async () => {
+    const { rows: [item] } = await dbModule.query(
+      "INSERT INTO exam_items (odoo_version, fingerprint, question_en) VALUES ('19','oracle-fp','Q') RETURNING id");
+    const { rows: [at] } = await dbModule.query(
+      "INSERT INTO exam_attempts (bank_id, item_id) VALUES ($1,$2) RETURNING id", [bankB, item.id]);
+    const mine = await request(app).post(`/api/exam/attempts/${at.id}/vote`).set(as(tok.a)).send({ answer: 'A' });
+    const ghost = await request(app).post('/api/exam/attempts/99999999/vote').set(as(tok.a)).send({ answer: 'A' });
+    expect(`${mine.status} ${mine.body.error}`).toBe(`${ghost.status} ${ghost.body.error}`);
+    expect(mine.status).toBe(404);
   });
 });
