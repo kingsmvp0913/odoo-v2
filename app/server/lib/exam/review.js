@@ -376,7 +376,7 @@ function checkGlossary(zhText, glossary) {
   return { missed };
 }
 
-function runPrompt({ prompt, imagePath = null, onProgress, model = MODEL }) {
+function runPrompt({ prompt, imagePath = null, onProgress, model = MODEL, authEnv = null }) {
   return new Promise((resolve, reject) => {
     // 每次呼叫一個獨立的暫存目錄：截圖複製進去，agent 只看得到那一個檔案。
     // 獨立目錄同時讓並行審查不會互相蓋掉截圖。
@@ -399,7 +399,13 @@ function runPrompt({ prompt, imagePath = null, onProgress, model = MODEL }) {
       '--model', model,
     ];
 
-    const child = spawn('claude', args, { stdio: ['pipe', 'pipe', 'pipe'], cwd: runCwd, env: pickLegacyEnv(process.env) });
+    const child = spawn('claude', args, {
+      stdio: ['pipe', 'pipe', 'pipe'], cwd: runCwd,
+      // authEnv 必須 spread 在**後面**。官方認證優先序是 ANTHROPIC_AUTH_TOKEN >
+      // ANTHROPIC_API_KEY > CLAUDE_CODE_OAUTH_TOKEN > 憑證檔，而白名單放行的 HOME
+      // 會讓主機的憑證檔可讀——順序寫反就會靜靜沿用廠商的訂閱，不報錯、測試也不紅。
+      env: { ...pickLegacyEnv(process.env), ...(authEnv || {}) },
+    });
     // 子行程提早死掉時對已關閉的 stdin 寫入會發 EPIPE；無 handler 會變 uncaughtException。
     child.stdin.on('error', () => {});
 
@@ -457,22 +463,22 @@ function runPrompt({ prompt, imagePath = null, onProgress, model = MODEL }) {
   });
 }
 
-async function reviewPage({ imagePath, theirAnswers, glossary, onProgress, model = MODEL }) {
+async function reviewPage({ imagePath, theirAnswers, glossary, onProgress, model = MODEL, authEnv = null }) {
   const out = await runPrompt({
     prompt: buildPrompt({ imageName: 'shot.jpg', theirAnswers, glossary }),
-    imagePath, onProgress, model,
+    imagePath, onProgress, model, authEnv,
   });
   return { verdict: normalize(out.raw, theirAnswers, questions), usage: out.usage, model: out.model };
 }
 
-async function extractPage({ imagePath, onProgress, model = MODEL }) {
+async function extractPage({ imagePath, onProgress, model = MODEL, authEnv = null }) {
   const out = await runPrompt({
-    prompt: buildExtractPrompt({ imageName: 'shot.jpg' }), imagePath, onProgress, model,
+    prompt: buildExtractPrompt({ imageName: 'shot.jpg' }), imagePath, onProgress, model, authEnv,
   });
   return { page: normalizeExtract(out.raw), usage: out.usage, model: out.model };
 }
 
-async function reviewQuestions({ questions, theirAnswers, glossary, imagePath, onProgress, model = MODEL }) {
+async function reviewQuestions({ questions, theirAnswers, glossary, imagePath, onProgress, model = MODEL, authEnv = null }) {
   const needsImage = (questions || []).some(q => q.has_image === true);
   const out = await runPrompt({
     prompt: buildReviewQuestionsPrompt({
@@ -481,6 +487,7 @@ async function reviewQuestions({ questions, theirAnswers, glossary, imagePath, o
     imagePath: needsImage ? imagePath : null,
     onProgress,
     model,
+    authEnv,
   });
   return { verdict: normalize(out.raw, theirAnswers, questions), usage: out.usage, model: out.model };
 }

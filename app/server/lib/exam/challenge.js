@@ -153,7 +153,7 @@ function normalizeChallenge(raw, theirAnswers = [], source = null, dirs = null) 
 }
 
 function challengePage({ questions, theirAnswers, glossary, odooVersion,
-  imagePath = null, onProgress, model = MODEL }) {
+  imagePath = null, onProgress, model = MODEL, authEnv = null }) {
   return new Promise((resolve, reject) => {
     // 每次呼叫一個獨立目錄。併行 5 個 worker 共用一個沙箱時，一個在重建 symlink
     // 的瞬間另一個會看到空目錄（實測 P4 因此失敗），而且兩頁的截圖會互相蓋掉。
@@ -189,7 +189,13 @@ function challengePage({ questions, theirAnswers, glossary, odooVersion,
       '--model', model,
     ];
 
-    const child = spawn('claude', args, { stdio: ['pipe', 'pipe', 'pipe'], cwd, env: pickLegacyEnv(process.env) });
+    const child = spawn('claude', args, {
+      stdio: ['pipe', 'pipe', 'pipe'], cwd,
+      // authEnv 必須 spread 在**後面**。官方認證優先序是 ANTHROPIC_AUTH_TOKEN >
+      // ANTHROPIC_API_KEY > CLAUDE_CODE_OAUTH_TOKEN > 憑證檔，而白名單放行的 HOME
+      // 會讓主機的憑證檔可讀——順序寫反就會靜靜沿用廠商的訂閱，不報錯、測試也不紅。
+      env: { ...pickLegacyEnv(process.env), ...(authEnv || {}) },
+    });
     child.stdin.on('error', () => {});
 
     let assistantText = '', lineBuffer = '', stderr = '', usage = null, settled = false;

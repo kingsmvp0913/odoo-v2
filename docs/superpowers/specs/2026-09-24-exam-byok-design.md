@@ -1,7 +1,10 @@
 # 考試系統改用客戶自己的 API key 設計（平台產品化 子專案 2 的延伸）
 
 日期：2026-09-24
-狀態：設計已於 2026-09-24 經使用者逐節確認；尚未實作
+狀態：設計已於 2026-09-24 經使用者逐節確認；**程式已實作、測試全綠，但未重啟、未人工驗收**
+實作紀錄：全跑 402 suites／5907 tests，新增 24 項全過，失敗數與動手前的基線完全相同（4 項，
+都在 `frontend-base-path` 與 `frontend-auth-reactivity` 這兩支既有紅燈上，與本次無關）。
+§6 那兩項人工驗收尚未執行。
 前置：子專案 2（`2026-09-11-byok-api-key-design.md`，`buildClaudeAuthEnv` 已上線）、子專案 1（公司表）
 總覽：`2026-09-11-productize-overview.md`；進度以「開發順序」§0 為準
 
@@ -20,7 +23,7 @@
 這些是 2026-09-24 使用者在四個選項中只挑了「客戶自帶 key」的直接結果，不是遺漏：
 
 - **記帳**：考試花費仍不進 `token_usage`，用量報表看不到考試。
-- **進容器**：考試 AI 仍在主機上跑（`--allowed-tools Read` 這道成本閘門因此得以保留；`runClaude` 不支援該參數）。
+- **進容器**：考試 AI 仍在主機上跑。兩道既有的工具閘門因此得以保留——`review.js` 的 `--allowed-tools`（有截圖才給 `Read`，否則空字串）與 `challenge.js` 的 `--disallowed-tools`；`runClaude` 兩者都不支援。
 - **花費上限**：考試沒有「任務」這個單位，`--max-budget-usd` 無處可掛。
 - **可中止**：`exam-upload-routes.js:192` 註解描述的既有限制（公司被停用時正在跑的那一輪會跑完）仍然存在。
 - **題庫的跨公司可見性**：`GET /api/exam/banks` 至今沒有公司過濾，所有開了考試功能的公司互看得到彼此的題庫。**這是獨立的缺陷，開第一家客戶之前必須處理，但不在本設計範圍**。
@@ -88,7 +91,7 @@
 
 ### 3.4 刻意不動的
 
-prompt 文字、CLI 參數、`cwd`、`model`、MCP 設定檔（`lib/exam/mcp/none.json`）、`--allowed-tools Read`、逾時長度——全部逐字不動。這是 §4 品質關卡成立的前提。
+prompt 文字、CLI 參數、`cwd`、`model`、MCP 設定檔（`lib/exam/mcp/none.json`）、兩道工具閘門（`review.js` 的 `--allowed-tools`、`challenge.js` 的 `--disallowed-tools` 與 `--append-system-prompt`）、逾時長度——全部逐字不動。這是 §4 品質關卡成立的前提。
 
 ### 3.5 已知的副作用（使用者已確認接受）
 

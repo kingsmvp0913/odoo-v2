@@ -17,6 +17,7 @@ const path = require('path');
 const { extractPage, saveVerdicts } = require('./review');
 const { challengePage } = require('./challenge');
 const { saveEvidence } = require('./evidence');
+const { buildClaudeAuthEnv } = require('../claude-auth');
 const { lookupTerms } = require('./glossary');
 const { fingerprint } = require('./fingerprint');
 const { baseConfidence, calibrateSection } = require('./confidence');
@@ -49,7 +50,19 @@ async function processUpload(db, { upload, bank, onProgress }) {
   const shot = path.join(uploadRootOf(), upload.image_path);
   const parsed = parseAnswers(upload.answer_raw);
 
-  const { page } = await extractPage({ imagePath: shot, onProgress });
+  // 這一頁的錢算誰的（規格 2026-09-24-exam-byok-design.md §3.2）。
+  //
+  // 為什麼讀 DB 的欄位而不是「呼叫者是誰」：判題常常不在上傳那個請求裡發生——
+  // 平台重啟後的續跑（index.js 的 reclaimInterrupted → scheduleQueue）完全沒有
+  // 發起人，而 buildClaudeAuthEnv(null) 的約定是「用平台訂閱」。靠呼叫者的話，
+  // 客戶的考試只要遇到一次重啟，錢就靜靜記到廠商頭上，而且不會報錯。
+  //
+  // 客戶公司沒設 key 時這裡會丟 NO_ANTHROPIC_KEY，**刻意不攔**：讓它沿 runQueue
+  // 既有的單頁失敗路徑走（該頁標 failed、訊息就是給人看的白話）。任何 fallback
+  // 到平台訂閱的分支都等於廠商替客戶付錢，違反 Anthropic 條款。
+  const authEnv = await buildClaudeAuthEnv(upload.user_id ?? null);
+
+  const { page } = await extractPage({ imagePath: shot, onProgress, authEnv });
 
   if (page.readable === false) {
     throw new Error(`讀不出題目：${page.note || '(未說明)'}`);
@@ -139,6 +152,7 @@ async function processUpload(db, { upload, bank, onProgress }) {
       odooVersion: bank.odoo_version,
       imagePath: shot,
       onProgress,
+      authEnv,
     });
     if (verdict.readable === false) throw new Error(`挑戰失敗：${verdict.note || '(未說明)'}`);
     reviewed = verdict.questions || [];
@@ -286,7 +300,7 @@ async function runQueue(db, { bankId, onEvent = () => {} }) {
   // 正在審的那頁照樣跑完（中途砍掉會留下沒有判斷的孤兒作答，跟失敗路徑一樣要刪掉重來），
   // 排隊的留在 pending 不動，取消暫停後原地接上。
   const fetchPending = async () => (await db.query(
-    `SELECT u.id, u.bank_id, u.page, u.answer_raw, u.responder, u.image_path, u.is_test, u.section_title
+    `SELECT u.id, u.bank_id, u.page, u.answer_raw, u.responder, u.image_path, u.is_test, u.section_title, u.user_id
        FROM exam_uploads u JOIN exam_banks b ON b.id = u.bank_id
       WHERE u.bank_id = $1 AND u.status = 'pending' AND NOT b.paused ORDER BY u.id`, [bankId])).rows;
 

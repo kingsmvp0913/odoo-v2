@@ -81,8 +81,8 @@ function normalizeSections(raw) {
   return { readable: true, sections: out, skipped };
 }
 
-async function readSections({ imagePath, onProgress, model = MODEL }) {
-  const out = await runPrompt({ prompt: buildPrompt(), imagePath, onProgress, model });
+async function readSections({ imagePath, onProgress, model = MODEL, authEnv = null }) {
+  const out = await runPrompt({ prompt: buildPrompt(), imagePath, onProgress, model, authEnv });
   return normalizeSections(out.raw);
 }
 

@@ -1241,6 +1241,10 @@ async function migrate() {
     // 考試結果必須能精確回到是哪一張 POST 截圖。只靠 bank/page 會在重考同頁碼時串錯。
     { table: 'exam_attempts', col: 'upload_id', sql: 'ALTER TABLE exam_attempts ADD COLUMN upload_id INTEGER REFERENCES exam_uploads(id) ON DELETE SET NULL' },
     { table: 'exam_uploads', col: 'batch_key', sql: 'ALTER TABLE exam_uploads ADD COLUMN batch_key TEXT' },
+    // 這一頁的 AI 該用誰的 Anthropic 憑證（規格 2026-09-24-exam-byok-design.md §3.1）。
+    // null＝內部，用平台訂閱。ON DELETE SET NULL：帳號刪除不該連帶刪掉考試紀錄，
+    // 而不寫刪除行為會讓 REFERENCES 直接擋死刪除。
+    { table: 'exam_uploads', col: 'user_id', sql: 'ALTER TABLE exam_uploads ADD COLUMN user_id INTEGER REFERENCES users(id) ON DELETE SET NULL' },
     { table: 'exam_uploads', col: 'batch_label', sql: 'ALTER TABLE exam_uploads ADD COLUMN batch_label TEXT' },
     // 一頁截圖＝一個章節（舊題庫 19 頁 19 章節，零例外）。章節是 certain 推導的骨架：
     // 官方成績只到章節層級，沒有章節就沒有「這章全對」可勾，整個歸檔流程失去依據。

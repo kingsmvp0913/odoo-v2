@@ -53,7 +53,10 @@ function peekUploadToken(dataDir) {
   const token = String(raw && raw.token || '').trim();
   const expiresAt = Number(raw && raw.expires_at) || 0;
   if (!token || !expiresAt) return null;
-  return { token, expiresAt, expired: Date.now() >= expiresAt };
+  // issuedBy：用這把碼傳進來的圖算誰的（規格 §3.1）。同時只有一把有效，所以
+  // 「誰產的」就是唯一算得出來的歸屬。升級前產生的碼沒有這一欄 ⇒ null＝內部。
+  const issuedBy = Number.isInteger(raw && raw.issued_by) ? raw.issued_by : null;
+  return { token, expiresAt, issuedBy, expired: Date.now() >= expiresAt };
 }
 
 // 認證用：過期的一律當作沒有。
@@ -63,12 +66,14 @@ function readUploadToken(dataDir) {
 }
 
 // 重產＝舊的立刻失效（只留一把有效的鑰匙）。
-function issueUploadToken(dataDir) {
+function issueUploadToken(dataDir, issuedBy = null) {
   fs.mkdirSync(path.join(dataDir, 'exam'), { recursive: true });
   const token = crypto.randomBytes(18).toString('base64url');
   const expiresAt = Date.now() + tokenTtlMs();
-  fs.writeFileSync(tokenPath(dataDir), JSON.stringify({ token, expires_at: expiresAt }, null, 2));
-  return { token, expiresAt };
+  const issued = Number.isInteger(issuedBy) ? issuedBy : null;
+  fs.writeFileSync(tokenPath(dataDir),
+    JSON.stringify({ token, expires_at: expiresAt, issued_by: issued }, null, 2));
+  return { token, expiresAt, issuedBy: issued };
 }
 
 // **判斷一律用 req.socket.remoteAddress，絕不可改成看 header／query／body 裡的東西。**

@@ -18,9 +18,22 @@ test('只留系統變數與 git 加固；三把鑰匙與其他平台變數全部
   expect(LEGACY_ENV_KEYS).not.toEqual(expect.arrayContaining(['APP_SECRET']));
 });
 
+// 原本逐行比對 spawn('claude' 那一行。2026-09-24 加上客戶自帶 key 之後，review.js 與
+// challenge.js 的 spawn 選項跨了多行（env 要併進 authEnv），那種寫法讓這支守衛對不上，
+// 而它守的東西並沒有變。改成看整個呼叫並先剝掉註解——註解裡出現 process.env 不代表
+// 程式真的那樣寫，剝掉才不會被自己的說明文字騙過去。
 test.each(['challenge.js', 'review.js', 'evidence.js'])('lib/exam/%s 的 spawn 帶 env 白名單', (f) => {
   const src = fs.readFileSync(path.join(__dirname, '..', 'lib', 'exam', f), 'utf8');
   const spawnLines = src.split('\n').filter(l => l.includes("spawn('claude'"));
   expect(spawnLines.length).toBe(1);
-  expect(spawnLines[0]).toMatch(/env: pickLegacyEnv\(process\.env\)/);
+
+  const code = src.split('\n').filter(l => !/^\s*(\/\/|\*)/.test(l)).join('\n');
+  const call = code.slice(code.indexOf("spawn('claude'"));
+  const envExpr = call.slice(call.indexOf('env:'), call.indexOf('env:') + 120);
+
+  // 白名單必須是 env 的**起點**。多給一層 { ... } 併別的東西可以（憑證就是這樣進去的），
+  // 但起點不是白名單就等於把三把總鑰匙送進子行程。
+  expect(envExpr).toMatch(/^env: (\{ \.\.\.)?pickLegacyEnv\(process\.env\)/);
+  // 併進來的東西不得是整包 process.env——那會把白名單擋掉的鑰匙原封不動補回去。
+  expect(envExpr).not.toMatch(/\.\.\.process\.env/);
 });

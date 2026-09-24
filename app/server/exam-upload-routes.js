@@ -25,6 +25,7 @@ const { listPages, archiveBank } = require('./lib/exam/archive');
 const { optionScores } = require('./lib/exam/score');
 const { readSections, matchToPages, assignByOrder } = require('./lib/exam/sections');
 const { emitAll } = require('./notify');
+const { buildClaudeAuthEnv } = require('./lib/claude-auth');
 
 const MAX_IMAGE_BYTES = parseInt(process.env.EXAM_MAX_IMAGE_BYTES || String(20 * 1024 * 1024), 10);
 const BATCH_BODY_LIMIT = process.env.EXAM_BATCH_BODY_LIMIT || '60mb';
@@ -55,7 +56,9 @@ const shotUpload = multer({
 async function checkExamToken(req, res, next) {
   // 本機來的免 token：從 127.0.0.1 開儀表板的就是這台機器自己。
   // 判斷一律用 socket.remoteAddress，絕不可看 header（同網段誰都偽造得出來）。
-  if (isLocal(req)) return next();
+  // 本機＝這台主機自己（廠商的截圖工具），算內部、用平台訂閱（規格 §3.1）。
+  // 明確寫 null 而不是留 undefined：這一欄決定誰付錢，不可以靠 pg 對 undefined 的處理。
+  if (isLocal(req)) { req.examUserId = null; return next(); }
 
   // 平台帳號也放行。X-Token 是給「不想開平台帳號的同事」用的旁路，不是唯一的路——
   // 沒有這一段的話，作戰台頁面（瀏覽器來自區網，isLocal 為 false）明明已經登入，
@@ -80,6 +83,9 @@ async function checkExamToken(req, res, next) {
       if (!(await companyHasFeature(user.company_id, 'exam'))) {
         return res.status(404).json({ error: '找不到這個功能' });
       }
+      // 這一頁的 AI 要用這個人所屬公司的憑證。原本驗完 payload 就丟掉，於是判題
+      // 時（可能是幾分鐘後、甚至重啟之後）已經無從得知是誰。
+      req.examUserId = payload.userId;
       return next();
     } catch { /* 壞 token 不放行，往下走 X-Token 那條 */ }
   }
@@ -95,6 +101,8 @@ async function checkExamToken(req, res, next) {
   }
   const got = req.get('X-Token') || req.query.token;
   if (got !== current.token) return res.status(401).json({ error: '通行碼不對' });
+  // 這把碼不屬於任何帳號，但只有登入的人產得出來——所以算產碼的那個人。
+  req.examUserId = current.issuedBy ?? null;
   next();
 }
 
@@ -167,15 +175,16 @@ const TEST_UPLOAD_NOTE = '測試上傳（test=1）：只驗證上傳路徑，未
 
 // responder（作答者）已移除：前端從來沒顯示過，DB 裡 120 筆全是 NULL——
 // 純粹是要人多填一格的贅欄。欄位本身留在 schema，不動舊資料。
-async function insertUpload({ bankId, batchKey, batchLabel, page, answer, imagePath, isTest, section }) {
+async function insertUpload({ bankId, batchKey, batchLabel, page, answer, imagePath, isTest, section, userId }) {
   const { rows } = await query(
     `INSERT INTO exam_uploads
        (bank_id, batch_key, batch_label, page, answer_raw, image_path, is_test,
-        section_title, status, error)
-     VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10) RETURNING id`,
+        section_title, status, error, user_id)
+     VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11) RETURNING id`,
     [bankId, batchKey || null, batchLabel || null, String(page), answer,
      imagePath, !!isTest, sectionValue(section),
-     isTest ? 'done' : 'pending', isTest ? TEST_UPLOAD_NOTE : null]
+     isTest ? 'done' : 'pending', isTest ? TEST_UPLOAD_NOTE : null,
+     Number.isInteger(userId) ? userId : null]
   );
   return rows[0].id;
 }
@@ -245,7 +254,8 @@ function registerRoutes(app) {
   });
 
   app.post('/api/exam/upload-token', verifyToken, requireFeature('exam'), (req, res) => {
-    const t = issueUploadToken(dataDir());
+    // 記下發放者：拿這把碼上傳的圖，AI 就用他所屬公司的憑證跑。
+    const t = issueUploadToken(dataDir(), req.userId);
     res.json({ token: t.token, expires_at: t.expiresAt });
   });
 
@@ -275,6 +285,7 @@ function registerRoutes(app) {
       const id = await insertUpload({
         bankId: bank.id, batchKey: req.body.batch, batchLabel: req.body.label,
         page, answer, section: req.body.section, imagePath, isTest,
+        userId: req.examUserId,
       });
       // status 要照實講。回 'queued' 而實際上不會判題，是在騙呼叫端等一個不會來的結果。
       res.json({ id, bank: bank.label, page, status: isTest ? 'test-ok' : 'queued' });
@@ -322,6 +333,7 @@ function registerRoutes(app) {
         const id = await insertUpload({
           bankId: bank.id, batchKey, batchLabel, page: it.page, answer: it.answer,
           imagePath, section: it.section ?? req.body.section, isTest,
+          userId: req.examUserId,
         });
         if (!isTest) real++;
         accepted.push({ id, page: String(it.page), test: isTest || undefined });
@@ -598,7 +610,9 @@ function registerRoutes(app) {
         const rel = saveImage({ uploadRoot: uploadRoot(), bankId, buf: req.file.buffer, ext });
         tmp = path.join(uploadRoot(), rel);
 
-        const read = await readSections({ imagePath: tmp });
+        // 讀成績單也會燒 token，一樣要算在發起者公司頭上（規格 §3.2）。
+        const read = await readSections({
+          imagePath: tmp, authEnv: await buildClaudeAuthEnv(req.userId) });
         if (!read.readable) {
           return res.status(422).json({ error: `讀不出成績單：${read.note || '未說明'}` });
         }
