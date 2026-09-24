@@ -33,6 +33,24 @@ test('儲存帶齊兩組上限（整組覆寫），且不再送 mode／project_i
   expect(save[0]).not.toContain('project_ids');
 });
 
+// 2026-09-24 實機驗收撞到：loadAgentSandbox 只有 runBackupNow 會呼叫，loadAll／created 都沒叫，
+// 所以這一區從加上去那天起就永遠顯示「狀態讀取失敗」——端點是好的（直接打回 200），
+// 唯一能讓它顯示真值的路徑是去按「立即備份」。這種 bug 不會有人回報，因為畫面「看起來有反應」。
+test('進頁面就要去讀，不能只靠別的動作順便帶到', () => {
+  const loadAll = page.match(/async loadAll\(\)[\s\S]*?\n {6}\},/);
+  expect(loadAll).not.toBeNull();
+  expect(loadAll[0]).toContain('loadAgentSandbox()');
+});
+
+// 同一次驗收撞到的第二件事：拿掉模式選鈕之後，區塊說明還寫著「這裡設定每個容器可以用多少資源」，
+// 但畫面上一個輸入框都沒有，儲存鈕只能把讀回來的值原樣 PUT 回去。說明承諾的功能要真的在。
+test('六個上限都有輸入框（說明承諾可以設定，就要真的設得了）', () => {
+  for (const f of ['agentSandbox.limits.memory', 'agentSandbox.limits.cpus', 'agentSandbox.limits.pids',
+                   'agentSandbox.gateway_limits.memory', 'agentSandbox.gateway_limits.cpus', 'agentSandbox.gateway_limits.pids']) {
+    expect(page).toMatch(new RegExp(`<input[^>]*v-model[^>]*${f.replace(/\./g, '\\.')}`));
+  }
+});
+
 // 上限缺值不是小事：容器模式規定上限必填（lib/agent-sandbox.js 硬擋），缺了就是全部 AI 執行失敗。
 // 畫面要當場講出來，不要讓人從一堆「執行失敗」裡反推。
 test('上限缺值時畫面直接示警', () => {

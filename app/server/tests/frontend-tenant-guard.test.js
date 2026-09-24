@@ -210,14 +210,16 @@ describe('ui-next 外殼：受限入口都帶著條件（不是裸露的）', ()
   // 條件各不相同是刻意的，不是還沒統一：
   //  - 上正式的判準是後端的 canReleaseProject（平台管理員 or 綁定勾了可上正式的公司管理員），
   //    光看 role 算不出來，掛 isAdmin 會把有權限的公司管理員也擋掉。
-  //  - 公司帳號頁公司管理員與平台管理員都能進。
+  //  - 公司帳號頁看的是「自己那家公司」，所以真正的判準是**有沒有公司**，不是角色。
+  //    2026-09-24 實機驗收撞到：平台管理員 company_id 是 null，入口照掛，點進去四支 API
+  //    全 400、整頁只剩一行紅字。角色條件對、公司條件漏了，而畫面上看不出差別。
   const SIDEBAR_ITEMS = [
     ['@click="goProjectTab(project.id, \'repos\')"', 'v-if="isAdmin"'],
     ['@click="goProjectTab(project.id, \'db\')"', 'v-if="isAdmin"'],
     ['@click="goProjectTab(project.id, \'settings\')"', 'v-if="isAdmin"'],
     ['@click="openRelease(project.id)"', 'v-if="project.can_release"'],
     ['@click="downloadTaskZip(task)"', 'v-if="isAdmin && task.git_branch"'],
-    ['@click="go(\'/company-users\')"', `v-if="userStore.role === 'company_admin' || isAdmin"`],
+    ['@click="go(\'/company-users\')"', `v-if="userStore.companyId && (userStore.role === 'company_admin' || isAdmin)"`],
   ];
 
   test.each(SIDEBAR_ITEMS)('側欄的 %s 帶著條件', (callsite, cond) => {

@@ -1085,7 +1085,16 @@
     template: `
       <section class="ui-next-page ui-next-task-detail">
 <div v-if="loading" class="ui-next-loading-card">載入任務中…</div>
-<div v-else-if="error" class="ui-next-loading-card ui-next-error-text">{{ error }}</div>
+<!-- 讀不到任務時原本只印後端的 error 字串，而後端回的是英文 'Task not found'：
+     整頁一行紅色英文，沒標題也沒返回鍵。這正是客戶收到別人任務連結時會看到的畫面
+     （權限判定本身是對的——看不到一律 404，不回 403）。 -->
+<div v-else-if="error" class="ui-next-page-head">
+  <div>
+    <h1>看不到這張任務</h1>
+    <p>這張任務不存在，或不屬於你有權限查看的專案。</p>
+  </div>
+  <button class="btn btn-primary btn-sm" @click="back">返回</button>
+</div>
 <template v-else-if="task">
 <!-- 頂欄固定在頁面上方：名稱、來源／狀態／階段，動作按鈕。原本這裡是「大標題 ＋ 一整排
      六個標籤 ＋ 三個頁籤」三層，佔掉整個第一屏；標籤砍到只剩看了會做決定的那三個。 -->

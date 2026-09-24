@@ -233,6 +233,10 @@
           await this.loadEmbedding();
           await this.loadBackups();
           await this.loadReleaseWindow();
+          // ⚠ 這一行原本不存在：loadAgentSandbox 只有 runBackupNow 會呼叫，所以這一區從加上
+          // 去那天起就永遠顯示「狀態讀取失敗」，唯一能讓它顯示真值的路徑是去按「立即備份」。
+          // 端點本身一直是好的（2026-09-24 實測直接打回 200）。
+          await this.loadAgentSandbox();
         } catch (e) { showToast(e.message, 'error'); }
         finally { this.loading = false; }
       },
@@ -858,9 +862,41 @@
               <div class="setting-block-desc">所有 AI 一律在隔離容器裡執行（看不到平台總鑰匙與別家專案），沒有關閉選項。這裡設定每個容器可以用多少資源；改完立即生效，不必重啟，目前正在跑的 AI 不受影響。</div>
             </div>
             <div class="setting-block-body">
-              <div v-if="agentSandbox" data-rwd-volatile style="font-size:var(--fs-sm);display:flex;flex-direction:column;gap:var(--space-2)">
-                <div>AI 容器：記憶體 {{ agentSandbox.limits.memory || '未設定' }}／CPU {{ agentSandbox.limits.cpus || '未設定' }}／程式數 {{ agentSandbox.limits.pids || '未設定' }}</div>
-                <div>對外閘道：記憶體 {{ agentSandbox.gateway_limits.memory || '未設定' }}／CPU {{ agentSandbox.gateway_limits.cpus || '未設定' }}／程式數 {{ agentSandbox.gateway_limits.pids || '未設定' }}</div>
+              <div v-if="agentSandbox" data-rwd-volatile>
+                <div class="conn-group">
+                  <div class="conn-group-label">AI 容器</div>
+                  <div class="conn-fields">
+                    <div class="field-item field-item-narrow">
+                      <label class="field-label">記憶體（例：4g）</label>
+                      <input v-model="agentSandbox.limits.memory" placeholder="4g" class="field-input" />
+                    </div>
+                    <div class="field-item field-item-narrow">
+                      <label class="field-label">CPU 數</label>
+                      <input v-model="agentSandbox.limits.cpus" placeholder="2" class="field-input" />
+                    </div>
+                    <div class="field-item field-item-narrow">
+                      <label class="field-label">程式數上限（32–65536）</label>
+                      <input v-model.number="agentSandbox.limits.pids" type="number" min="32" max="65536" class="field-input" />
+                    </div>
+                  </div>
+                </div>
+                <div class="conn-group">
+                  <div class="conn-group-label">對外閘道</div>
+                  <div class="conn-fields">
+                    <div class="field-item field-item-narrow">
+                      <label class="field-label">記憶體（例：256m）</label>
+                      <input v-model="agentSandbox.gateway_limits.memory" placeholder="256m" class="field-input" />
+                    </div>
+                    <div class="field-item field-item-narrow">
+                      <label class="field-label">CPU 數</label>
+                      <input v-model="agentSandbox.gateway_limits.cpus" placeholder="0.5" class="field-input" />
+                    </div>
+                    <div class="field-item field-item-narrow">
+                      <label class="field-label">程式數上限（32–65536）</label>
+                      <input v-model.number="agentSandbox.gateway_limits.pids" type="number" min="32" max="65536" class="field-input" />
+                    </div>
+                  </div>
+                </div>
                 <div v-if="!agentSandbox.limits.memory || !agentSandbox.limits.cpus || !agentSandbox.limits.pids" class="error-msg">資源上限未設定：AI 會全部執行失敗（容器模式要求上限必填）</div>
               </div>
               <div v-else style="font-size:var(--fs-sm);color:var(--text-muted)">狀態讀取失敗</div>
