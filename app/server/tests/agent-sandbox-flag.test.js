@@ -1,54 +1,36 @@
-// 意圖：開關決定 AI 在不在容器裡跑。三件事不能錯：
-//  1. 認不得的值要落到最嚴格（全開），不能默默變成「關」而繞過隔離（rules/pipeline 59）
-//  2. internal 只影響健檢／夜間改善，客戶 agent 照舊；projects 只影響清單內的測試專案
-//  3. 只有平台管理員能改；改完不必重啟就生效（rules/infra 122）
+// 意圖：AI 全部在容器裡跑（2026-09-24 拿掉舊的非容器路徑），這裡只剩資源上限。三件事不能錯：
+//  1. 上限格式要擋住（容器模式規定必填，格式錯＝全部 AI 執行失敗）
+//  2. 只有平台管理員能改；改完不必重啟就生效（rules/infra 122）
+//  3. **這個模組不得再提供任何「要不要進容器」的開關**——留一個就是留一條靜默取消隔離的後門，
+//     而走那條路的 AI 用平台訂閱跑客戶的工作，不報錯，只出現在月底帳單上
 process.env.JWT_SECRET = 'test-agent-sandbox-flag';
 const { newDb } = require('pg-mem');
 const request = require('supertest');
 const f = require('../lib/agent-sandbox-flag');
-const { profileFor } = require('../lib/agent-profiles');
 
 describe('純邏輯', () => {
-  test('未知 mode → all（最嚴格），合法值原樣', () => {
-    expect(f.normalizeMode('of')).toBe('all');
-    expect(f.normalizeMode(null)).toBe('all');
-    expect(f.normalizeMode('internal')).toBe('internal');
+  test('validateFlagInput 擋格式錯的上限', () => {
+    expect(() => f.validateFlagInput({ memory: '4 GB' })).toThrow();
+    expect(() => f.validateFlagInput({ cpus: 'two' })).toThrow();
+    expect(() => f.validateFlagInput({ pids: 10 })).toThrow();      // 下限 32
+    expect(() => f.validateFlagInput({ pids: 1.5 })).toThrow();     // 必須整數
+    expect(f.validateFlagInput({ memory: '4g', cpus: '2', pids: 512, gateway_memory: '256m', gateway_cpus: '0.5', gateway_pids: 128 }))
+      .toEqual({ memory: '4g', cpus: '2', pids: 512, gwMemory: '256m', gwCpus: '0.5', gwPids: 128 });
   });
-  test('parseProjectIds 只收正整數', () => {
-    expect([...f.parseProjectIds('3, 12,x,-1,0')]).toEqual([3, 12]);
-    expect(f.parseProjectIds(null).size).toBe(0);
+
+  // 空字串與 null 都代表「沒設」，不可以變成字串 'null' 被寫進 DB
+  test('空值一律正規化成 null', () => {
+    expect(f.validateFlagInput({ memory: '', cpus: null, pids: undefined }))
+      .toMatchObject({ memory: null, cpus: null, pids: null });
   });
-  test('off：誰都不進容器', () => {
-    f._setFlagStateForTesting({ mode: 'off', projectIds: new Set([1]) });
-    expect(f.sandboxAppliesTo(profileFor('workflow_health'), null)).toBe(false);
-    expect(f.sandboxAppliesTo(profileFor('coding'), 1)).toBe(false);
-  });
-  test('internal：只有內部 agent 進容器', () => {
-    f._setFlagStateForTesting({ mode: 'internal', projectIds: new Set([1]) });
-    expect(f.sandboxAppliesTo(profileFor('platform_fix'), null)).toBe(true);
-    expect(f.sandboxAppliesTo(profileFor('coding'), 1)).toBe(false);
-    expect(f.sandboxAppliesTo(profileFor('deploy_fix'), 1)).toBe(false);
-  });
-  // 用「清單內 1、清單外 2」兩個專案，才分得出「看清單」與「全開」
-  test('projects：內部＋清單內專案進容器，清單外照舊', () => {
-    f._setFlagStateForTesting({ mode: 'projects', projectIds: new Set([1]) });
-    expect(f.sandboxAppliesTo(profileFor('workflow_health'), null)).toBe(true);
-    expect(f.sandboxAppliesTo(profileFor('coding'), 1)).toBe(true);
-    expect(f.sandboxAppliesTo(profileFor('coding'), 2)).toBe(false);
-    expect(f.sandboxAppliesTo(profileFor('chat-title'), null)).toBe(false);
-  });
-  test('all：全部進容器', () => {
-    f._setFlagStateForTesting({ mode: 'all', projectIds: new Set() });
-    expect(f.sandboxAppliesTo(profileFor('chat-title'), null)).toBe(true);
-  });
-  test('validateFlagInput 擋格式錯的上限與 mode', () => {
-    expect(() => f.validateFlagInput({ mode: 'maybe' })).toThrow();
-    expect(() => f.validateFlagInput({ mode: 'off', memory: '4 GB' })).toThrow();
-    expect(() => f.validateFlagInput({ mode: 'off', cpus: 'two' })).toThrow();
-    expect(() => f.validateFlagInput({ mode: 'off', pids: 10 })).toThrow();
-    expect(() => f.validateFlagInput({ mode: 'projects', project_ids: ['a'] })).toThrow();
-    expect(f.validateFlagInput({ mode: 'projects', project_ids: [3], memory: '4g', cpus: '2', pids: 512 }))
-      .toMatchObject({ mode: 'projects', projectIds: [3], memory: '4g', cpus: '2', pids: 512 });
+
+  // 這條是上面第 3 點的牙齒：有人為了「緊急退回不隔離」把開關加回來時，這裡會紅。
+  // 要真的退回非容器執行，正確做法是改 pipeline/claude-runner.js 並在那裡寫下理由，
+  // 不是在這個模組偷偷開一個 getter。
+  test('模組不得再輸出任何模式開關', () => {
+    for (const gone of ['getSandboxMode', 'sandboxAppliesTo', 'normalizeMode', 'parseProjectIds', 'MODES']) {
+      expect(f[gone]).toBeUndefined();
+    }
   });
 });
 
@@ -71,36 +53,38 @@ describe('DB 載入與管理員端點', () => {
   }, 30000);
   afterAll(() => dbModule._setPoolForTesting(null));
 
-  test('新 DB 預設 off（合併進 master 不改變行為）', async () => {
+  test('新 DB 的上限是空的（缺值由 lib/agent-sandbox.js 硬擋，不是這裡補預設）', async () => {
     await f.loadAgentSandboxFlag();
-    expect(f.getSandboxMode()).toBe('off');
     expect(f.getSandboxLimits()).toEqual({ memory: null, cpus: null, pids: null });
+    expect(f.getGatewayLimits()).toEqual({ memory: null, cpus: null, pids: null });
   });
 
   test('一般使用者不能改', async () => {
     const res = await request(app).put('/api/admin/agent-sandbox')
-      .set('Authorization', `Bearer ${userToken}`).send({ mode: 'all' });
+      .set('Authorization', `Bearer ${userToken}`).send({ memory: '4g' });
     expect(res.status).toBe(403);
   });
 
   test('管理員改完立即生效、記下改動時間', async () => {
     const res = await request(app).put('/api/admin/agent-sandbox').set('Authorization', `Bearer ${adminToken}`)
-      .send({ mode: 'projects', project_ids: [9], memory: '4g', cpus: '2', pids: 512, gateway_memory: '256m', gateway_cpus: '0.5', gateway_pids: 128 });
+      .send({ memory: '4g', cpus: '2', pids: 512, gateway_memory: '256m', gateway_cpus: '0.5', gateway_pids: 128 });
     expect(res.status).toBe(200);
-    expect(f.getSandboxMode()).toBe('projects');
-    expect(f.sandboxAppliesTo(profileFor('qa'), 9)).toBe(true);
     expect(f.getSandboxLimits()).toEqual({ memory: '4g', cpus: '2', pids: 512 });
     expect(f.getGatewayLimits()).toEqual({ memory: '256m', cpus: '0.5', pids: 128 });
     const g = await request(app).get('/api/admin/agent-sandbox').set('Authorization', `Bearer ${adminToken}`);
-    expect(g.body).toMatchObject({ mode: 'projects', project_ids: [9] });
+    expect(g.body.limits).toEqual({ memory: '4g', cpus: '2', pids: 512 });
     expect(g.body.changed_at).toBeTruthy();
+    // 端點不得再回模式：前端只要看得到它，下一個人就會把選鈕加回來
+    expect(g.body.mode).toBeUndefined();
+    expect(g.body.project_ids).toBeUndefined();
   });
 
-  test('DB 裡被寫進怪值 → 載入後是 all', async () => {
-    await dbModule.query("UPDATE teams_settings SET agent_sandbox_mode='typo' WHERE id=1");
-    await f.loadAgentSandboxFlag();
-    expect(f.getSandboxMode()).toBe('all');
+  // DB 欄位刻意留著不刪（刪欄位要 migration 而換不到任何行為），但程式完全不讀它。
+  // 這條驗「手動改那一欄真的沒有任何效果」——沒有後門是被測試釘住的，不是靠註解宣稱。
+  test('有人手動改 DB 的 agent_sandbox_mode → 載入後行為完全不變', async () => {
     await dbModule.query("UPDATE teams_settings SET agent_sandbox_mode='off' WHERE id=1");
     await f.loadAgentSandboxFlag();
+    expect(f.getSandboxLimits()).toEqual({ memory: '4g', cpus: '2', pids: 512 });
+    expect(f.getFlagState().mode).toBeUndefined();
   });
 });

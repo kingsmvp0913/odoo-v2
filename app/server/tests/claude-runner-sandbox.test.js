@@ -1,5 +1,5 @@
 // 意圖（規格 §5、§6）：runner 的解析邏輯不變，只是子行程換成 docker。四件事不能錯：
-//  1. 開關 off 時一個字都不變（同步 spawn claude）
+//  1. **只有容器一條路**——2026-09-24 拿掉舊的非容器路徑，spawn 的對象永遠是 docker
 //  2. 容器準備失敗必須失敗，絕不偷偷改跑容器外的 claude
 //  3. 停止／逾時要 docker kill：SIGKILL 送到 docker CLI 不會轉給容器，容器會繼續跑、繼續燒錢
 //  4. 被記憶體上限砍掉要講清楚，不是泛用的 exited with code 137
@@ -28,31 +28,9 @@ const tick = () => new Promise(r => setImmediate(r));
 const resultLine = JSON.stringify({ type: 'result', subtype: 'success', result: 'done', usage: { input_tokens: 1, output_tokens: 1 } });
 
 beforeEach(() => { spawn.mockReset(); sr.resolveSandboxPlan.mockReset(); sr.prepareSandboxRun.mockReset(); });
-afterEach(() => flag._setFlagStateForTesting({ mode: 'off' }));
-
-test('off：同步 spawn claude（呼叫當下就已 spawn），不碰 sandbox-run', () => {
-  flag._setFlagStateForTesting({ mode: 'off' });
-  const c = child(); spawn.mockReturnValueOnce(c);
-  const p = runClaude('x', { agentType: 'chat-title' });
-  expect(spawn).toHaveBeenCalledWith('claude', expect.any(Array), expect.objectContaining({ env: expect.any(Object) }));
-  expect(sr.resolveSandboxPlan).not.toHaveBeenCalled();
-  c.stdout.emit('data', `${resultLine}\n`); c.emit('close', 0);
-  return expect(p).resolves.toMatchObject({ text: 'done' });
-});
-
-test('plan 為 null → 舊路徑 spawn claude', async () => {
-  flag._setFlagStateForTesting({ mode: 'internal' });
-  sr.resolveSandboxPlan.mockResolvedValueOnce(null);
-  const c = child(); spawn.mockReturnValueOnce(c);
-  const p = runClaude('x', { agentType: 'chat-title' });
-  await tick(); await tick();
-  expect(spawn).toHaveBeenCalledWith('claude', expect.any(Array), expect.any(Object));
-  c.stdout.emit('data', `${resultLine}\n`); c.emit('close', 0);
-  await expect(p).resolves.toMatchObject({ text: 'done' });
-});
+afterEach(() => flag._setFlagStateForTesting({}));
 
 test('容器路徑：spawn docker、不帶 cwd、解析照舊、結束時 release', async () => {
-  flag._setFlagStateForTesting({ mode: 'all' });
   const run = fakeRun();
   sr.resolveSandboxPlan.mockResolvedValueOnce({ profile: { scope: 'none', mount: 'none' }, projectId: null });
   sr.prepareSandboxRun.mockResolvedValueOnce(run);
@@ -71,7 +49,6 @@ test('容器路徑：spawn docker、不帶 cwd、解析照舊、結束時 releas
 });
 
 test('準備失敗 → reject，而且從頭到尾沒有 spawn claude', async () => {
-  flag._setFlagStateForTesting({ mode: 'all' });
   sr.resolveSandboxPlan.mockResolvedValueOnce({ profile: { scope: 'none', mount: 'none' }, projectId: null });
   sr.prepareSandboxRun.mockRejectedValueOnce(new Error('AI 映像檔 aidev-agent:x 不存在'));
   await expect(runClaude('x', { agentType: 'chat-title' })).rejects.toMatchObject({ claudeStatus: 'error', message: expect.stringMatching(/映像檔/) });
@@ -79,14 +56,12 @@ test('準備失敗 → reject，而且從頭到尾沒有 spawn claude', async ()
 });
 
 test('未登記 agentType（resolveSandboxPlan 丟例外）→ reject，不 spawn', async () => {
-  flag._setFlagStateForTesting({ mode: 'all' });
   sr.resolveSandboxPlan.mockRejectedValueOnce(new Error('未登記的 agentType：x'));
   await expect(runClaude('x', { agentType: 'x' })).rejects.toThrow(/未登記/);
   expect(spawn).not.toHaveBeenCalled();
 });
 
 test('按停止 → docker kill（run.kill）＋ release', async () => {
-  flag._setFlagStateForTesting({ mode: 'all' });
   const run = fakeRun();
   sr.resolveSandboxPlan.mockResolvedValueOnce({ profile: {}, projectId: null });
   sr.prepareSandboxRun.mockResolvedValueOnce(run);
@@ -102,7 +77,6 @@ test('按停止 → docker kill（run.kill）＋ release', async () => {
 });
 
 test('逾時 → docker kill', async () => {
-  flag._setFlagStateForTesting({ mode: 'all' });
   const run = fakeRun();
   sr.resolveSandboxPlan.mockResolvedValueOnce({ profile: {}, projectId: null });
   sr.prepareSandboxRun.mockResolvedValueOnce(run);
@@ -112,7 +86,6 @@ test('逾時 → docker kill', async () => {
 });
 
 test('準備期間就按停止 → 準備完成後立刻 release，不 spawn', async () => {
-  flag._setFlagStateForTesting({ mode: 'all' });
   const run = fakeRun();
   let resolvePrep;
   sr.resolveSandboxPlan.mockResolvedValueOnce({ profile: {}, projectId: null });
@@ -129,7 +102,7 @@ test('準備期間就按停止 → 準備完成後立刻 release，不 spawn', a
 });
 
 test('容器 exit 137 → oom，訊息寫明記憶體上限', async () => {
-  flag._setFlagStateForTesting({ mode: 'all', limits: { memory: '4g', cpus: '2', pids: 512 } });
+  flag._setFlagStateForTesting({ limits: { memory: '4g', cpus: '2', pids: 512 } });
   const run = fakeRun();
   sr.resolveSandboxPlan.mockResolvedValueOnce({ profile: {}, projectId: null });
   sr.prepareSandboxRun.mockResolvedValueOnce(run);
@@ -138,4 +111,29 @@ test('容器 exit 137 → oom，訊息寫明記憶體上限', async () => {
   await tick(); await tick();
   c.emit('close', 137);
   await expect(p).rejects.toMatchObject({ claudeStatus: 'oom', message: expect.stringMatching(/記憶體上限.*4g/) });
+});
+
+// 這條守的是「舊路徑真的沒了」。它會紅的情境只有一種：有人為了救急，在某個失敗分支裡
+// 加回 spawn('claude', ...)。那條路用的是平台訂閱、不報錯、隔離靜默取消——症狀只會出現在
+// 月底帳單上，所以必須由測試擋，不能靠註解或 code review。
+test('不管走到哪個分支，spawn 的對象永遠是 docker，絕不是 claude', async () => {
+  const run = fakeRun();
+  sr.resolveSandboxPlan.mockResolvedValue({ profile: {}, projectId: null });
+  sr.prepareSandboxRun.mockResolvedValueOnce(run);
+  const c = child(); spawn.mockReturnValueOnce(c);
+  const ok = runClaude('x', { agentType: 'chat-title' });
+  await tick(); await tick();
+  c.stdout.emit('data', `${resultLine}\n`); c.emit('close', 0);
+  await ok;
+
+  // 準備失敗那一條：失敗就是失敗，不准有 fallback
+  sr.prepareSandboxRun.mockRejectedValueOnce(new Error('docker daemon 沒回應'));
+  await expect(runClaude('x', { agentType: 'chat-title' })).rejects.toThrow(/docker daemon/);
+
+  // 計畫解析失敗那一條：同上
+  sr.resolveSandboxPlan.mockRejectedValueOnce(new Error('DB 連不上'));
+  await expect(runClaude('x', { agentType: 'chat-title' })).rejects.toThrow(/DB 連不上/);
+
+  expect(spawn.mock.calls.every(c2 => c2[0] === 'docker')).toBe(true);
+  expect(spawn.mock.calls.length).toBe(1);   // 後兩條連 spawn 都不該發生
 });

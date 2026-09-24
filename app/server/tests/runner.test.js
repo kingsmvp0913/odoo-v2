@@ -121,24 +121,30 @@ test('analysis_running 未綁專案 → runTaskAnalysis 回 false → stopped', 
   expect(rows[0].blocker_content).toContain('專案');
 });
 
-test('客戶任務有花費上限但容器未全開 → 停止派工，不能走無預算限制的舊路徑', async () => {
-  const flag = require('../lib/agent-sandbox-flag');
+// 這裡原本有一道守衛：沙箱開關不是 all 時，有花費上限的客戶任務一律擋下派工——因為舊的
+// 非容器路徑在同步 spawn 之前算不出剩餘額度，也傳不了 --max-budget-usd，等於花費防線被繞過。
+//
+// 2026-09-24 舊路徑整個拿掉，沒有「非 all 模式」這回事了，那道守衛沒有東西可守，已移除。
+// 這條測試換成驗它的**相反面**：同樣一張有上限的客戶任務現在要能正常派工。
+// 留著它是因為「擋下」與「放行」長得很像——把守衛刪錯地方（例如連帶刪掉餘額檢查）不會有
+// 任何徵狀，只會讓客戶任務在沒有上限的情況下一路跑下去。餘額本身由 sandbox-run 每次組容器
+// 前重算（sandbox-run.test.js 驗那一段），而容器是唯一的執行路徑（claude-runner-sandbox.test.js 驗）。
+test('客戶任務有花費上限 → 照常派工（上限改由每次組容器前重算，不再擋在派工這一關）', async () => {
   const { runTaskAnalysis } = require('../pipeline/task-agent');
+  runTaskAnalysis.mockResolvedValue(true);
   const { rows: [company] } = await dbModule.query(
     "INSERT INTO companies (name, is_active, task_budget_usd) VALUES ('runner budget', true, 1) RETURNING id"
   );
   await dbModule.query('UPDATE users SET company_id=$1 WHERE id=$2', [company.id, userId]);
   const taskId = await insertTask('analysis_running');
-  flag._setFlagStateForTesting({ mode: 'off' });
   try {
     await run();
     const { rows: [task] } = await dbModule.query('SELECT status, blocker_content FROM tasks WHERE id=$1', [taskId]);
-    expect(task.status).toBe('stopped');
-    expect(task.blocker_content).toContain('全容器模式');
-    expect(runTaskAnalysis).not.toHaveBeenCalled();
+    expect(task.status).not.toBe('stopped');
+    expect(task.blocker_content).toBeNull();
+    expect(runTaskAnalysis).toHaveBeenCalled();
   } finally {
     await dbModule.query('UPDATE users SET company_id=NULL WHERE id=$1', [userId]);
-    flag._setFlagStateForTesting({ mode: 'off' });
   }
 });
 

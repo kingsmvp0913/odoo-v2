@@ -1,5 +1,5 @@
-// 意圖：這支把「profile＋專案＋開關」變成一次真正的 docker run。要鎖住：
-//  - 開關沒涵蓋的 agent 回 null（照舊路徑），涵蓋的一定走容器；未登記的 agentType 直接丟例外
+// 意圖：這支把「profile＋專案」變成一次真正的 docker run。要鎖住：
+//  - 每個 agent 都走容器（2026-09-24 拿掉舊路徑，沒有「不進容器」這個結果）；未登記的 agentType 直接丟例外
 //  - 容器 env 帶的是本次通行證與閘道位址，不是全域通行碼與 localhost
 //  - 沒有 Claude token 就失敗（不退回容器外的憑證檔）；任何準備失敗都收回通行證與 worktree
 //  - 停止＝docker kill 容器名（只殺 docker CLI 不會停容器，會繼續燒錢，規格 §6）
@@ -7,7 +7,6 @@ process.env.APP_SECRET = 'test-sandbox-run';
 const path = require('path');
 const sr = require('../pipeline/sandbox-run');
 const rt = require('../lib/agent-run-token');
-const flag = require('../lib/agent-sandbox-flag');
 
 const APP = path.resolve(__dirname, '..', '..', '..');
 function deps(over = {}) {
@@ -41,16 +40,25 @@ const ARGS = ['-p', '--output-format', 'stream-json', '--verbose', '--dangerousl
 beforeEach(() => rt._resetRunsForTesting());
 
 describe('resolveSandboxPlan', () => {
-  afterEach(() => flag._setFlagStateForTesting({ mode: 'off' }));
-  test('projects 模式：由 tasks.id 補出專案，清單內才進容器', async () => {
-    flag._setFlagStateForTesting({ mode: 'projects', projectIds: new Set([7]) });
+  test('由 tasks.id 補出專案（掛載與 scope 都靠它分家）', async () => {
     const { d } = deps();
     await expect(sr.resolveSandboxPlan('qa', { taskId: 70 }, d)).resolves.toMatchObject({ projectId: 7 });
     const { d: d2 } = deps({ query: async () => ({ rows: [{ project_id: 8 }] }) });
-    await expect(sr.resolveSandboxPlan('qa', { taskId: 71 }, d2)).resolves.toBeNull();
+    await expect(sr.resolveSandboxPlan('qa', { taskId: 71 }, d2)).resolves.toMatchObject({ projectId: 8 });
   });
+
+  // 拿掉舊路徑之後，這支**永遠不會回 null**。回 null 曾經的意思是「這個 agent 不進容器」，
+  // 而呼叫端（claude-runner）對那個值的處理就是 spawn('claude') 繞過隔離。現在那條路沒了，
+  // 所以這裡多一個「不管誰來都拿得到計畫」的斷言：哪天有人讓它回 null，紅的是這裡，
+  // 而不是幾個月後某張帳單。
+  test('每個登記過的 agent 都拿得到計畫，不會回 null', async () => {
+    const { d } = deps();
+    for (const t of ['qa', 'coding', 'chat', 'workflow_health', 'chat-title']) {
+      await expect(sr.resolveSandboxPlan(t, {}, d)).resolves.toEqual(expect.objectContaining({ profile: expect.any(Object) }));
+    }
+  });
+
   test('未登記 agentType → 丟例外', async () => {
-    flag._setFlagStateForTesting({ mode: 'all' });
     await expect(sr.resolveSandboxPlan('mystery', {}, deps().d)).rejects.toThrow(/mystery/);
   });
 });
@@ -109,6 +117,43 @@ describe('prepareSandboxRun', () => {
     // ⚠ CLAUDE_CODE_OAUTH_TOKEN 優先序最低，這兩把任一混進來就會讓客戶那把靜靜失效
     expect(`夾帶會蓋掉它的變數: ${'ANTHROPIC_API_KEY' in run.childEnv || 'ANTHROPIC_AUTH_TOKEN' in run.childEnv}`)
       .toBe('夾帶會蓋掉它的變數: false');
+    await run.release();
+  });
+
+  // ── 以下三條原本在 claude-runner.test.js。拿掉舊路徑之後 runClaude 不再自己組 env，
+  //    這些 env 改由這裡組；測試跟著搬過來，**不是**新增的守衛。
+
+  // 使用者層的 security-guidance plugin（官方 marketplace）掛 Stop hook 且帶 asyncRewake＝「agent
+  // 講完話要停下時，把它叫醒再講一次」。pipeline agent 一旦在 <result> 之後被叫醒補一段話，
+  // 末輪 ev.result 就換成那段話——task 248 的分析關即因此整輪報廢（規格完全正確卻被判
+  // 「未回傳有效結果」）。人用的互動 session 不受影響。
+  test('容器 env 帶 SECURITY_GUIDANCE_DISABLE=1（外部 hook 不得叫醒 pipeline agent）', async () => {
+    const { d } = deps();
+    const run = await sr.prepareSandboxRun({ claudeArgs: ARGS, opts: { agentType: 'qa' }, profile: profileFor('qa'), projectId: 7 }, d);
+    expect(run.argv).toContain('SECURITY_GUIDANCE_DISABLE=1');
+    await run.release();
+  });
+
+  // Claude Code 的 prompt 快取預設是 1h TTL，而 1h 的寫入費率是 2× base input、5m 是 1.25×。
+  // 實測本平台 97.3% 的相鄰呼叫在 1 分鐘內、只有 0.62% 超過 5 分鐘，付 2× 完全買不到東西。
+  // 這個釘子還撐著 lib/token-cost.js 的 cache_create 係數 1.25——拿掉它，整份成本報表會低估
+  // 兩成而毫無徵狀。所以它必須有測試守著，不能只靠註解。
+  test('容器 env 把 prompt 快取 TTL 釘在 5m（成本模型的 1.25 係數依賴它）', async () => {
+    const { d } = deps();
+    const run = await sr.prepareSandboxRun({ claudeArgs: ARGS, opts: { agentType: 'qa' }, profile: profileFor('qa'), projectId: 7 }, d);
+    expect(run.argv).toContain('CLAUDE_CODE_PROMPT_CACHE_TTL=5m');
+    // 係數與釘子綁在一起：任一邊改了另一邊沒改，這裡就會紅。
+    expect(require('../lib/token-cost').costSql('').weighted).toContain('cache_create_tokens * 1.25');
+    await run.release();
+  });
+
+  // 呼叫端自帶的 env 是有人要用的（playwright 關的 E2E_PASSWORD、coding 關的 git 身分）。
+  // 被容器的預設 env 蓋掉的話，症狀是「E2E 一律登入失敗」，而錯誤訊息只會說密碼錯。
+  test('呼叫端自帶的 env 原樣進容器，不被預設值蓋掉', async () => {
+    const { d } = deps();
+    const run = await sr.prepareSandboxRun({ claudeArgs: ARGS, opts: { agentType: 'spec_tour', env: { E2E_PASSWORD: 'pw' } }, profile: profileFor('spec_tour'), projectId: 7 }, d);
+    expect(run.argv.join(' ')).toContain('-e E2E_PASSWORD');
+    expect(run.childEnv.E2E_PASSWORD).toBe('pw');
     await run.release();
   });
 

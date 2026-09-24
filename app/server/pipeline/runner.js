@@ -458,12 +458,10 @@ async function runTask(task, settings, signal) {
     const handler = HANDLERS[task.status];
     if (!handler) return;
 
-    // 舊的非容器路徑無法在同步 spawn 前查出每次剩餘額度，也無法可靠傳 --max-budget-usd。
-    // 有設定上限的客戶任務一律要求 all 模式，不能因沙箱開關被關掉就靜默繞過花費防線。
-    if (require('../lib/agent-sandbox-flag').getSandboxMode() !== 'all') {
-      const remaining = await require('../lib/task-budget').remainingTaskBudget(task.id);
-      if (remaining != null) throw new Error('此任務已設定花費上限，須啟用全容器模式才能繼續，避免繞過上限');
-    }
+    // （2026-09-24）這裡原本有一道守衛：非 all 模式時，有花費上限的客戶任務一律擋下，
+    // 因為舊的非容器路徑無法在同步 spawn 前算餘額、也傳不了 --max-budget-usd。
+    // 舊路徑已經整個拿掉，沒有「非 all 模式」這回事了，這道守衛因此沒有東西可守——
+    // 餘額改由 sandbox-run 每次組容器前重算（那是唯一的執行路徑）。
 
     // 階段標記（每次進入一關寫一次；派工已排除在飛任務，不會重複）
     const marker = `\n\x1b[96m▶ ${STAGE_LABELS[task.status] || task.status}\x1b[0m\n`;

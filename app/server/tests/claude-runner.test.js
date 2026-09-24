@@ -5,6 +5,10 @@ process.env.CLAUDE_RATE_LIMIT_CACHE = require('path').join(require('os').tmpdir(
 const { newDb } = require('pg-mem');
 
 jest.mock('child_process', () => ({ spawn: jest.fn() }));
+// AI 一律在容器裡跑（2026-09-24 拿掉舊的非容器路徑）。真的 sandbox-run 會查 DB、驗映像檔、
+// 發通行證、建 worktree，單元測試跑不動；容器路徑本身的行為由 sandbox-run.test.js 對真品驗。
+jest.mock('../pipeline/sandbox-run', () => require('./_sandbox-run-mock')());
+const { untilSpawned } = require('./_sandbox-run-mock');
 
 let dbModule, logTokenUsage;
 
@@ -188,6 +192,7 @@ test('runClaude：從 init 事件抓到 session_id 並回傳', async () => {
 
   const { runClaude } = require('../pipeline/claude-runner');
   const p = runClaude('p', {});
+  await untilSpawned();
   child.stdout.emit('data', JSON.stringify({ type: 'system', subtype: 'init', session_id: 'sess-abc' }) + '\n');
   child.stdout.emit('data', JSON.stringify({ type: 'result', result: 'done', usage: null, duration_ms: 5 }) + '\n');
   child.emit('close', 0);
@@ -206,6 +211,7 @@ test('runClaude：result 的 total_cost_usd 跟用量一起回傳供實際金額
 
   const { runClaude } = require('../pipeline/claude-runner');
   const p = runClaude('p', {});
+  await untilSpawned();
   child.stdout.emit('data', JSON.stringify({ type: 'result', result: 'done', usage: { input_tokens: 1 }, total_cost_usd: 0.1234 }) + '\n');
   child.emit('close', 0);
   expect((await p).usage.total_cost_usd).toBe(0.1234);
@@ -227,6 +233,7 @@ test('runClaude：攔下 rate_limit_event 並記進用量狀態', async () => {
   usage._resetCacheForTesting();
   const { runClaude } = require('../pipeline/claude-runner');
   const p = runClaude('p', {});
+  await untilSpawned();
   child.stdout.emit('data', JSON.stringify({
     type: 'rate_limit_event',
     rate_limit_info: { status: 'allowed', resetsAt: 1787809200, rateLimitType: 'five_hour' }
@@ -253,6 +260,7 @@ test('runClaude：assistantText 累積全部 assistant 文字（非只末輪 ev.
 
   const { runClaude } = require('../pipeline/claude-runner');
   const p = runClaude('p', {});
+  await untilSpawned();
   // 中間輪吐出 <result>，末輪只剩收尾散文
   child.stdout.emit('data', JSON.stringify({ type: 'assistant', message: { model: 'x', content: [{ type: 'text', text: '<result>{"ok":1}</result>' }] } }) + '\n');
   child.stdout.emit('data', JSON.stringify({ type: 'assistant', message: { content: [{ type: 'text', text: '收尾散文' }] } }) + '\n');
@@ -263,55 +271,6 @@ test('runClaude：assistantText 累積全部 assistant 文字（非只末輪 ev.
   expect(r.assistantText).toContain('<result>{"ok":1}</result>');  // 但 transcript 撈得回
   // raw＝契約解析的唯一來源：呼叫端不必各自決定要取 text 還是 assistantText（取錯就是整輪報廢）
   expect(r.raw).toContain('<result>{"ok":1}</result>');
-});
-
-// 使用者層的 security-guidance plugin（官方 marketplace）掛 Stop hook 且帶 asyncRewake＝「agent 講完話
-// 要停下時，把它叫醒再講一次」。pipeline agent 一旦在 <result> 之後被叫醒補一段話，末輪 ev.result 就換成
-// 那段話——task 248 的分析關即因此整輪報廢（規格完全正確卻被判「未回傳有效結果」）。raw 是治本的那一半，
-// 這個 env 是另一半：不讓 pipeline 子行程被外部 hook 叫醒。人用的互動 session 不受影響。
-test('runClaude：spawn env 帶 SECURITY_GUIDANCE_DISABLE=1', async () => {
-  const { spawn } = require('child_process');
-  const { EventEmitter } = require('events');
-  const child = new EventEmitter();
-  child.stdout = new EventEmitter();
-  child.stderr = new EventEmitter();
-  child.stdin = { write: () => {}, end: () => {}, on: () => {} };
-  child.kill = jest.fn();
-  spawn.mockClear();
-  spawn.mockReturnValue(child);
-
-  const { runClaude } = require('../pipeline/claude-runner');
-  const p = runClaude('p', {});
-  child.stdout.emit('data', JSON.stringify({ type: 'result', result: 'x', usage: null, duration_ms: 1 }) + '\n');
-  child.emit('close', 0);
-  await p;
-  expect(spawn.mock.calls[0][2].env.SECURITY_GUIDANCE_DISABLE).toBe('1');
-});
-
-// Claude Code 的 prompt 快取預設是 1h TTL（env／settings 都沒設也一樣），而 1h 的寫入費率是 2×
-// base input、5m 是 1.25×。實測本平台 97.3% 的相鄰呼叫在 1 分鐘內、只有 0.62% 超過 5 分鐘，
-// 也就是絕大多數呼叫在 5m 內就被下一次讀取續命，付 2× 完全買不到東西（估算淨省約 11% 成本）。
-// 這個釘子還撐著 lib/token-cost.js 的 cache_create 係數 1.25——拿掉它，整份成本報表會低估兩成
-// 而毫無徵狀。所以它必須有測試守著，不能只靠註解。
-test('runClaude：spawn env 把 prompt 快取 TTL 釘在 5m（成本模型的 1.25 係數依賴它）', async () => {
-  const { spawn } = require('child_process');
-  const { EventEmitter } = require('events');
-  const child = new EventEmitter();
-  child.stdout = new EventEmitter();
-  child.stderr = new EventEmitter();
-  child.stdin = { write: () => {}, end: () => {}, on: () => {} };
-  child.kill = jest.fn();
-  spawn.mockClear();
-  spawn.mockReturnValue(child);
-
-  const { runClaude } = require('../pipeline/claude-runner');
-  const p = runClaude('p', {});
-  child.stdout.emit('data', JSON.stringify({ type: 'result', result: 'x', usage: null, duration_ms: 1 }) + '\n');
-  child.emit('close', 0);
-  await p;
-  expect(spawn.mock.calls[0][2].env.CLAUDE_CODE_PROMPT_CACHE_TTL).toBe('5m');
-  // 係數與釘子綁在一起：任一邊改了另一邊沒改，這裡就會紅。
-  expect(require('../lib/token-cost').costSql('').weighted).toContain('cache_create_tokens * 1.25');
 });
 
 test('runClaude：給 resumeSessionId → args 含 --resume；不給 → 不含', async () => {
@@ -385,6 +344,7 @@ test('runClaude：exit code null（外部 kill）→ reject 且 claudeStatus=int
   spawn.mockReturnValueOnce(child);
   const { runClaude } = require('../pipeline/claude-runner');
   const p = runClaude('p', {});
+  await untilSpawned();
   child.emit('close', null, 'SIGKILL');
   await expect(p).rejects.toMatchObject({ message: expect.stringMatching(/外部終止/), claudeStatus: 'interrupted' });
 });
@@ -404,6 +364,7 @@ test('runClaude：exit 非 0 且 stderr 空 → 用 stdout result 事件的錯�
   spawn.mockReturnValueOnce(child);
   const { runClaude } = require('../pipeline/claude-runner');
   const p = runClaude('p', {});
+  await untilSpawned();
   child.stdout.emit('data', JSON.stringify({
     type: 'result', subtype: 'error_max_turns', is_error: true, result: '額度已用盡'
   }) + '\n');
@@ -425,6 +386,7 @@ test('runClaude：exit 0 的 result 事件不被當成錯誤，正常回傳內�
   spawn.mockReturnValueOnce(child);
   const { runClaude } = require('../pipeline/claude-runner');
   const p = runClaude('p', {});
+  await untilSpawned();
   child.stdout.emit('data', JSON.stringify({ type: 'result', subtype: 'success', result: '做完了' }) + '\n');
   child.emit('close', 0);
   await expect(p).resolves.toMatchObject({ text: '做完了' });
@@ -449,93 +411,10 @@ test('logFailedUsage：失敗執行落一筆零用量記錄，status 標注失�
   expect(rows[0].duration_ms).toBe(600000);
 });
 
-// 管理員在網頁設定的長效憑證要真的到得了子行程：注入點集中在 runner（19 個呼叫端零改動），
-// 且不得蓋掉呼叫端自帶的 env（playwright 的 E2E_PASSWORD、coding 關的 git 身分）。
-describe('Claude 長效憑證注入 spawn env', () => {
-  const claudeAuth = require('../lib/claude-auth');
-  const mkChild = () => {
-    const { EventEmitter } = require('events');
-    const child = new EventEmitter();
-    child.stdout = new EventEmitter();
-    child.stderr = new EventEmitter();
-    child.stdin = { write: () => {}, end: () => setImmediate(() => child.emit('close', 0)), on: () => {} };
-    child.kill = jest.fn();
-    return child;
-  };
-  const lastEnv = () => {
-    const { spawn } = require('child_process');
-    return spawn.mock.calls[spawn.mock.calls.length - 1][2].env;
-  };
-
-  afterEach(() => claudeAuth._setForTesting(null));
-
-  test('已設定 → spawn env 帶 CLAUDE_CODE_OAUTH_TOKEN，且呼叫端 env 不被蓋掉', async () => {
-    const { spawn } = require('child_process');
-    const { runClaude } = require('../pipeline/claude-runner');
-    claudeAuth._setForTesting('sk-oat-live');
-    spawn.mockReturnValueOnce(mkChild());
-    await runClaude('p', { env: { E2E_PASSWORD: 'pw' } });
-    expect(lastEnv().CLAUDE_CODE_OAUTH_TOKEN).toBe('sk-oat-live');
-    expect(lastEnv().E2E_PASSWORD).toBe('pw');
-  });
-
-  // /ai/* 端點的通行碼：算得出來但沒注入子行程，agent 就打不開那些端點，
-  // 而症狀是「AI 突然查不到客戶 DB／wiki」，看起來完全不像認證問題（見 lib/ai-token.js）。
-  test('spawn env 帶 AIDEV_AI_TOKEN，值與 aiToken() 一致', async () => {
-    const { spawn } = require('child_process');
-    const { runClaude } = require('../pipeline/claude-runner');
-    const { aiToken } = require('../lib/ai-token');
-    const saved = process.env.APP_SECRET;
-    process.env.APP_SECRET = 'runner-ai-token-secret';
-    try {
-      spawn.mockReturnValueOnce(mkChild());
-      await runClaude('p', {});
-      expect(lastEnv().AIDEV_AI_TOKEN).toBe(aiToken());
-      expect(lastEnv().AIDEV_AI_TOKEN).toBeTruthy();
-    } finally { if (saved === undefined) delete process.env.APP_SECRET; else process.env.APP_SECRET = saved; }
-  });
-
-  // base URL 必須跟著執行期 PORT 走：prompt 曾寫死 3939（index.js 的預設值），正式機 PORT=8771，
-  // agent 的 curl 全部 connection refused——server 側一句 fail loud 都送不出來，症狀只剩
-  // 「讀不到設計稿」，看起來像 Figma token 沒設（實際發生：task 134，2026-08-14）。
-  test('spawn env 帶 AIDEV_AI_BASE，埠號取自執行期 PORT 而非寫死預設值', async () => {
-    const { spawn } = require('child_process');
-    const { runClaude } = require('../pipeline/claude-runner');
-    const saved = process.env.PORT;
-    process.env.PORT = '8771'; // 刻意不用 3939：與預設值相同就驗不出「有沒有真的讀 PORT」
-    try {
-      spawn.mockReturnValueOnce(mkChild());
-      await runClaude('p', {});
-      expect(lastEnv().AIDEV_AI_BASE).toBe('http://localhost:8771');
-    } finally { if (saved === undefined) delete process.env.PORT; else process.env.PORT = saved; }
-  });
-
-  // 未設定時必須「完全不碰」這個 key，否則會蓋掉手動 export 的環境變數（方案 1 手動版仍須可用）
-  test('未設定 → 不塞該 key，繼承自 process.env 的值原樣通過', async () => {
-    const { spawn } = require('child_process');
-    const { runClaude } = require('../pipeline/claude-runner');
-    claudeAuth._setForTesting(null);
-    process.env.CLAUDE_CODE_OAUTH_TOKEN = 'from-shell';
-    try {
-      spawn.mockReturnValueOnce(mkChild());
-      await runClaude('p', {});
-      expect(lastEnv().CLAUDE_CODE_OAUTH_TOKEN).toBe('from-shell');
-    } finally { delete process.env.CLAUDE_CODE_OAUTH_TOKEN; }
-  });
-
-  // UI 設定優先於環境變數——「在網頁上換帳號」若被 shell 的舊值蓋過就失去意義
-  test('DB 有設定 → 覆蓋 process.env 的同名變數', async () => {
-    const { spawn } = require('child_process');
-    const { runClaude } = require('../pipeline/claude-runner');
-    claudeAuth._setForTesting('from-db');
-    process.env.CLAUDE_CODE_OAUTH_TOKEN = 'from-shell';
-    try {
-      spawn.mockReturnValueOnce(mkChild());
-      await runClaude('p', {});
-      expect(lastEnv().CLAUDE_CODE_OAUTH_TOKEN).toBe('from-db');
-    } finally { delete process.env.CLAUDE_CODE_OAUTH_TOKEN; }
-  });
-});
+// 憑證與容器 env 的注入已整個搬到 pipeline/sandbox-run.js（拿掉舊路徑之後，runClaude 不再自己組 env）。
+// 對應的測試在 sandbox-run.test.js（憑證真的進得了容器、argv 不外洩祕密值、呼叫端 env 原樣通過、
+// 兩個釘死的 env）與 claude-auth.test.js（DB 設定優先於環境變數、未設定時完全不碰該 key）。
+// 這裡刻意不留一份「看起來還在測」的殘骸：spawn 拿到的 env 現在是 docker CLI 的 env，不是 agent 的。
 
 // 認證失效歸因：claude 憑證在並發 spawn 下被刷新踩空時印 "Not logged in" 走 stdout、stderr 空，
 // 舊版只剩泛用「claude exited with code 1」，blocker 看不出真因、分類器也判不出。
@@ -552,6 +431,7 @@ test('runClaude：stdout 印 Not logged in 後 exit 1 → 可讀的認證失效�
 
   const { runClaude } = require('../pipeline/claude-runner');
   const p = runClaude('p', {});
+  await untilSpawned();
   child.stdout.emit('data', 'Not logged in\n'); // 非 JSON 行，走 raw emit 分支
   child.emit('close', 1);
   await expect(p).rejects.toMatchObject({
@@ -574,6 +454,7 @@ test('runClaude：stderr 印認證字面 → 同樣標 claudeStatus=auth', async
 
   const { runClaude } = require('../pipeline/claude-runner');
   const p = runClaude('p', {});
+  await untilSpawned();
   child.stderr.emit('data', 'Invalid API key · Please run /login');
   child.emit('close', 1);
   await expect(p).rejects.toMatchObject({ claudeStatus: 'auth' });
@@ -596,6 +477,7 @@ test('runClaude：非認證的 exit 1 → 維持原訊息與 claudeStatus=error'
   const c1 = mk();
   spawn.mockReturnValueOnce(c1);
   const p1 = runClaude('p', {});
+  await untilSpawned();
   c1.stderr.emit('data', 'boom something broke');
   c1.emit('close', 1);
   await expect(p1).rejects.toMatchObject({ message: 'boom something broke', claudeStatus: 'error' });
@@ -603,6 +485,7 @@ test('runClaude：非認證的 exit 1 → 維持原訊息與 claudeStatus=error'
   const c2 = mk();
   spawn.mockReturnValueOnce(c2);
   const p2 = runClaude('p', {});
+  await untilSpawned();
   c2.emit('close', 1);
   await expect(p2).rejects.toMatchObject({ message: 'claude exited with code 1', claudeStatus: 'error' });
 });

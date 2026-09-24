@@ -4,6 +4,9 @@ process.env.CLAUDE_RATE_LIMIT_CACHE = require('path').join(require('os').tmpdir(
 const { EventEmitter } = require('events');
 const { newDb } = require('pg-mem');
 jest.mock('child_process', () => ({ spawn: jest.fn(), execFile: jest.fn() }));
+// AI 一律在容器裡跑，runClaude 只剩這條路；真品會查 DB、驗映像檔、發通行證，單元測試跑不動
+jest.mock('../pipeline/sandbox-run', () => require('./_sandbox-run-mock')());
+const { untilSpawned } = require('./_sandbox-run-mock');
 
 let dbModule, taskDbId;
 function child() {
@@ -35,6 +38,7 @@ async function runWith(emit, opts) {
   spawn.mockReturnValueOnce(c);
   const { runClaude } = require('../pipeline/claude-runner');
   const p = runClaude('x', { agentType: 'qa', taskId: taskDbId, resumeSessionId: 'old-session', ...opts });
+  await untilSpawned();   // 容器路徑的 spawn 在幾個 await 之後；太早發事件沒有人聽得到
   emit(c);
   return p.then(() => null, e => e);
 }
@@ -46,8 +50,9 @@ test('字面在 stderr → session_missing，且寫一列 task_logs', async () =
   await flush();
   const { rows } = await dbModule.query("SELECT content FROM task_logs WHERE task_id=$1 AND content LIKE '[續接]%'", [taskDbId]);
   expect(rows.length).toBe(1);
-  // 開關 off（沒走容器）時不能把原因說成「改在容器內執行」——那是誤導（最終審查 MINOR-1）
-  expect(rows[0].content).not.toMatch(/容器/);
+  // 只剩容器一條路，原因就要講那個真實原因：家目錄在容器裡，與上一輪的宿主 session 不同源。
+  // 使用者看到的是「這一關莫名多跑一次」，沒有這行字他無從得知為什麼（rules/pipeline 77）。
+  expect(rows[0].content).toMatch(/容器/);
 });
 
 test('字面在 stdout 的 result 事件 → 同樣認得', async () => {

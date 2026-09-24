@@ -44,10 +44,14 @@ async function requireAdmin(req, res, next) {
 function registerRoutes(app) {
   const auth = [verifyToken, requireAdmin];
 
-  // 子專案 0：AI 容器隔離開關與資源上限。只有平台管理員能看能改；存完立即重載快取，不必重啟。
+  // 子專案 0：AI 容器的**資源上限**。只有平台管理員能看能改；存完立即重載快取，不必重啟。
+  //
+  // 2026-09-24 起這裡沒有「要不要進容器」的開關了（使用者裁決拿掉舊的非容器路徑）。
+  // DB 的 agent_sandbox_mode／agent_sandbox_project_ids 兩欄留著不刪，但已無人讀寫——
+  // 手動改那兩欄不會有任何效果，這正是要的：沒有後門。
   app.get('/api/admin/agent-sandbox', auth, (_req, res) => {
     const s = require('./lib/agent-sandbox-flag').getFlagState();
-    res.json({ mode: s.mode, project_ids: s.projectIds, limits: s.limits, gateway_limits: s.gatewayLimits, changed_at: s.changedAt });
+    res.json({ limits: s.limits, gateway_limits: s.gatewayLimits, changed_at: s.changedAt });
   });
 
   app.put('/api/admin/agent-sandbox', auth, async (req, res) => {
@@ -57,17 +61,17 @@ function registerRoutes(app) {
     catch (err) { return res.status(err.statusCode || 400).json({ error: err.message }); }
     try {
       await query(
-        `INSERT INTO teams_settings (id, agent_sandbox_mode, agent_sandbox_project_ids, agent_sandbox_memory, agent_sandbox_cpus,
+        `INSERT INTO teams_settings (id, agent_sandbox_memory, agent_sandbox_cpus,
                                      agent_sandbox_pids, agent_gateway_memory, agent_gateway_cpus, agent_gateway_pids, agent_sandbox_changed_at)
-         VALUES (1, $1, $2, $3, $4, $5, $6, $7, $8, NOW())
-         ON CONFLICT (id) DO UPDATE SET agent_sandbox_mode=$1, agent_sandbox_project_ids=$2, agent_sandbox_memory=$3,
-           agent_sandbox_cpus=$4, agent_sandbox_pids=$5, agent_gateway_memory=$6, agent_gateway_cpus=$7,
-           agent_gateway_pids=$8, agent_sandbox_changed_at=NOW()`,
-        [v.mode, v.projectIds.join(','), v.memory, v.cpus, v.pids, v.gwMemory, v.gwCpus, v.gwPids]);
+         VALUES (1, $1, $2, $3, $4, $5, $6, NOW())
+         ON CONFLICT (id) DO UPDATE SET agent_sandbox_memory=$1,
+           agent_sandbox_cpus=$2, agent_sandbox_pids=$3, agent_gateway_memory=$4, agent_gateway_cpus=$5,
+           agent_gateway_pids=$6, agent_sandbox_changed_at=NOW()`,
+        [v.memory, v.cpus, v.pids, v.gwMemory, v.gwCpus, v.gwPids]);
       await flag.loadAgentSandboxFlag();
-      console.log(`[AGENT-SANDBOX] 管理員 ${req.userId} 設定 mode=${v.mode} projects=[${v.projectIds.join(',')}]`);
+      console.log(`[AGENT-SANDBOX] 管理員 ${req.userId} 設定容器資源上限 memory=${v.memory} cpus=${v.cpus} pids=${v.pids}`);
       const s = flag.getFlagState();
-      res.json({ mode: s.mode, project_ids: s.projectIds, limits: s.limits, gateway_limits: s.gatewayLimits, changed_at: s.changedAt });
+      res.json({ limits: s.limits, gateway_limits: s.gatewayLimits, changed_at: s.changedAt });
     } catch (err) { res.status(500).json({ error: err.message }); }
   });
 

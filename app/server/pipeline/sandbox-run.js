@@ -90,16 +90,17 @@ function sandboxMcpConfigPath(agentType, deps = {}) {
   return gen;
 }
 
+// 2026-09-24 起沒有「不進容器」這個選項了（使用者裁決拿掉舊路徑）。這支因此一定回得出
+// 計畫——它現在只負責「把專案 id 解出來」，不再負責「要不要進容器」。
 async function resolveSandboxPlan(agentType, opts = {}, deps = {}) {
   const query = deps.query || require('../db').query;
-  const { sandboxAppliesTo } = require('../lib/agent-sandbox-flag');
   const profile = profileFor(agentType);
   let projectId = opts.projectId != null ? Number(opts.projectId) : null;
   if (projectId == null && profile.scope === 'project' && opts.taskId != null) {
     const { rows: [t] } = await query('SELECT project_id FROM tasks WHERE id=$1', [opts.taskId]);
     projectId = t && t.project_id != null ? Number(t.project_id) : null;
   }
-  return sandboxAppliesTo(profile, projectId) ? { profile, projectId } : null;
+  return { profile, projectId };
 }
 
 async function prepareSandboxRun({ claudeArgs, opts = {}, profile, projectId }, deps = {}) {

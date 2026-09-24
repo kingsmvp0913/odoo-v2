@@ -11,6 +11,10 @@ const { encrypt } = require('../lib/crypto');
 // 可控 spawn mock：記錄每次呼叫的 args 與 stdin，並依腳本 emit 事件（session_id、result、exit code）
 function mockClaude({ onCall } = {}) {
   const { spawn } = require('child_process');
+  // 容器路徑下 spawn 的對象是 docker，**沒有 cwd**：工作目錄改以 opts.cwd 交給
+  // prepareSandboxRun，由它掛成容器的 --workdir。要驗「AI 跑在任務 worktree 裡」
+  // 就得看那裡（sandboxCwds），不是看 spawn 的 opts。計數一起清，兩邊索引才對得起來。
+  require('../pipeline/sandbox-run').prepareSandboxRun.mockClear();
   const calls = [];
   spawn.mockImplementation((bin, args, opts) => {
     const child = new EventEmitter();
@@ -34,6 +38,7 @@ function emitResult(child, status = 'qa_running') {
   child.stdout.emit('data', JSON.stringify({ type: 'result', result: `<result>\n{"status":"${status}"}\n</result>`, usage: null, duration_ms: 10 }) + '\n');
 }
 function defaultScript(child) { emitResult(child); child.emit('close', 0); }
+const sandboxCwds = () => require('../pipeline/sandbox-run').prepareSandboxRun.mock.calls.map(c => c[0].opts.cwd);
 
 jest.mock('../notify', () => ({ emitToUser: jest.fn() }));
 jest.mock('../pipeline/token-logger', () => ({ logTokenUsage: jest.fn(), logFailedUsage: jest.fn() }));
@@ -61,6 +66,13 @@ jest.mock('../pipeline/merge-agent', () => ({
   SYNC_LABELS: { oursLabel: 'ai-dev（AI 現況）', theirsLabel: 'main（工程師新進）' }
 }));
 jest.mock('child_process', () => ({ spawn: jest.fn() }));
+// AI 一律在容器裡跑（2026-09-24 拿掉舊的非容器路徑）：runClaude 只剩「準備容器 → spawn docker」
+// 一條路，真品會查 DB、驗映像檔、發通行證，單元測試跑不動。只換掉那兩支，waitForWorktreeIdle
+// 留真品（這支測的等容器行為就是它）。容器路徑本身由 sandbox-run.test.js 對真品驗。
+jest.mock('../pipeline/sandbox-run', () => ({
+  ...jest.requireActual('../pipeline/sandbox-run'),
+  ...require('./_sandbox-run-mock')(),
+}));
 
 let dbModule, runTaskAnalysis, runTaskCoding, runSpecTourGate, git, mergeAgent;
 let userId, projectId;
@@ -695,8 +707,8 @@ test('C-3 analysis 在「任務 worktree」讀最新 main（reset=true），且�
     '/repos/tap/main', expect.stringContaining('ana_iso'), 'task/ana_iso', 'ai-dev', true,
     expect.objectContaining({ GIT_COMMITTER_NAME: expect.any(String) })
   );
-  // claude cwd 是任務 worktree 父目錄（coding 之後會沿用同一個）
-  expect(calls[0].cwd).toContain(path.join('.worktrees', 'ana_iso'));
+  // AI 的工作目錄是任務 worktree 父目錄（coding 之後會沿用同一個）
+  expect(sandboxCwds()[0]).toContain(path.join('.worktrees', 'ana_iso'));
 });
 
 // ===== 主題 F：agent 契約強化 =====
@@ -1279,6 +1291,7 @@ test('analysis 沒產出有效規格（停在 stopped）→ 留言不得銷帳�
 // 還熱就依剛定稿的 acceptance 續寫 tour，實作之前先定考題。專案層開關，**預設關閉＝行為完全同現況**。
 function analysisSpawn(onStdin) {
   const { spawn } = require('child_process');
+  require('../pipeline/sandbox-run').prepareSandboxRun.mockClear();
   const { EventEmitter } = require('events');
   const calls = [];
   spawn.mockImplementation((bin, args, opts) => {
@@ -1349,8 +1362,8 @@ test('專案啟用 E2E → resume 分析 session 續寫，prompt 仍帶定稿規
     expect(tourCall.stdin).not.toContain('<result>');      // tour 類 agent 不得有 result 契約
     // agent-loader 對未匹配的 placeholder 只 console.warn 就替成空字串——最難察覺的準確性殺手
     expect(tourCall.stdin).not.toMatch(/\{\{\w+\}\}/);
-    // 帶 --dangerously-skip-permissions 跑，cwd 必須是任務 worktree，不能是平台自己的 repo
-    expect(tourCall.cwd).toContain(path.join('.worktrees', 'ta_tour'));
+    // 帶 --dangerously-skip-permissions 跑，工作目錄必須是任務 worktree，不能是平台自己的 repo
+    expect(sandboxCwds()[0]).toContain(path.join('.worktrees', 'ta_tour'));
   });
 });
 

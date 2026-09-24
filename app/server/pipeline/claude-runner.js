@@ -6,14 +6,12 @@ const notify = require('../notify');
 const { killChildGracefully } = require('../lib/proc');
 const { looksLikeAuthFailure } = require('./auth-signature');
 const { missingSessionReason } = require('./session-signature');
-const { getSandboxMode, getSandboxLimits } = require('../lib/agent-sandbox-flag');
+const { getSandboxLimits } = require('../lib/agent-sandbox-flag');
 
 // 容器路徑下被 SIGKILL 的 exit code（M9 實測）。docker 以 --rm 執行，結束後查不到 OOMKilled，只能看這個碼；
 // 平台自己 docker kill（停止／逾時）也是同一個碼，所以訊息寫「最可能」而不是「確定」。
 const OOM_EXIT_CODE = 137;
-const { getClaudeAuthEnv } = require('../lib/claude-auth');
 const { getContext7ApiKey } = require('../lib/context7-auth');
-const { aiTokenEnv, aiBaseEnv } = require('../lib/ai-token');
 
 // 每關「刻意指定」MCP：pipeline 子行程一律不繼承環境 MCP（--strict-mcp-config），
 // 凡需查「grep 補不了的 Odoo 原生知識」的關卡都掛 context7：analysis/coding（API 用法）、
@@ -154,7 +152,9 @@ const DEFAULT_TIMEOUT_MS = parseInt(process.env.CLAUDE_AGENT_TIMEOUT_MS || '2400
 // 統一 runner（合併原 callClaude/spawnClaude，健檢 U13）：所有階段共用一份子行程實作，
 // 事件流同時寫 socket 與 task_events；支援 cwd（worktree 隔離）、session 捕捉、--resume（主題 B）。
 function runClaude(prompt, opts = {}) {
-  const { signal, cwd, taskId, userId, model, timeoutMs = DEFAULT_TIMEOUT_MS, resumeSessionId, env, agentType } = opts;
+  // env 不再在這裡解構：憑證覆寫由 sandbox-run 從 opts.env 自己讀（callerEnv），
+  // 舊路徑拿掉後這裡沒有第二個組 env 的地方了。
+  const { signal, taskId, userId, model, timeoutMs = DEFAULT_TIMEOUT_MS, resumeSessionId, agentType } = opts;
   return new Promise((resolve, reject) => {
     // signal 已 abort（使用者在前置 DB 查詢／組 prompt 期間、或同關前一次 runClaude 進行中按暫停）：
     // addEventListener 對已 abort 的 signal 永遠不會觸發 → 不檢查的話這一整段 claude 會照跑燒 token
@@ -186,35 +186,6 @@ function runClaude(prompt, opts = {}) {
     let sandboxReleased = false;
     const releaseSandbox = () => {
       if (sandboxRun && !sandboxReleased) { sandboxReleased = true; Promise.resolve(sandboxRun.release()).catch(() => {}); }
-    };
-    // 舊路徑的 spawn 選項——內容與原本逐字相同，只是延後到「確定不走容器」時才真的 spawn
-    const legacyOpts = {
-      stdio: ['pipe', 'pipe', 'pipe'], cwd,
-      // aiTokenEnv：/ai/* 端點的通行碼。agent 用 curl 打那些端點時要帶進 header——
-      // 沒有它，agent 查不到客戶 DB／wiki，而症狀（403）完全不像認證問題（見 lib/ai-token.js）。
-      // aiBaseEnv：同一組端點的 base URL。prompt 不得寫死埠號，否則 PORT 一被覆寫就整組靜默失聯。
-      // SECURITY_GUIDANCE_DISABLE：關掉使用者層繼承來的 security-guidance plugin（官方 marketplace）。
-      // 它的 Stop hook 帶 asyncRewake＝「agent 講完話要停下時，把它叫醒再講一次」，而 pipeline agent
-      // 一旦在 <result> 之後被叫醒補一段話，CLI 末輪的 ev.result 就換成那段話、契約標籤整個蒸發
-      // （task 248 實例：14:44:17 Stop hook 觸發、14:44:47 審出 1 個 high/critical、14:45:02 agent 被
-      // 叫醒回「這跟我無關」，整輪分析報廢）。更糟的是它審的是**平台自己的 repo**（實測 baseline_sha
-      // 落在 odoo-v2 的 commit，untracked 清單是 app/server/*.js），與該任務的 worktree 毫不相干。
-      // 這裡只關 pipeline 子行程，人用的互動 session 不受影響。
-      // CLAUDE_CODE_PROMPT_CACHE_TTL：釘在 5m。Claude Code 自己的預設是 1h（env 與兩份 settings.json
-      // 皆未設定，實測 usage.cache_creation 仍全數落在 ephemeral_1h_input_tokens），而 1h 的快取寫入
-      // 費率是 2× base input、5m 是 1.25×。實測本平台同一任務相鄰事件的間隔 97.3% 在 1 分鐘內、只有
-      // 0.62% 超過 5 分鐘 —— 絕大多數呼叫在 5m 內就被下一次讀取續命（讀取會免費重置計時），付 2×
-      // 買不到任何東西。依 token_usage 2183 筆估算，改 5m 淨省約 11% 成本。
-      // ⚠ 這條與 lib/token-cost.js 的 cache_create 係數 1.25 綁死：拿掉這個釘子＝實際回到 1h＝2×，
-      // 而成本模型不會跟著變，整份帳會靜默低估兩成（且沒有任何測試會紅）。
-      // ⚠ 階段 3 的已知缺口：這條**舊路徑（非容器）**用的是同步的 getClaudeAuthEnv()，
-      // 也就是平台那把共用訂閱——客戶公司的執行若走到這裡，錢會算在廠商頭上，而且不會報錯。
-      // 客戶自帶 key 的解析（buildClaudeAuthEnv）只接在容器路徑（pipeline/sandbox-run.js），
-      // 因為本檔檔頭那條「讀取端必須同步」的限制擋住了在這裡查 DB：改成 await 會讓 spawn
-      // 晚一個 microtask，而既有測試多是「呼叫後同步對 mock child 發事件」，會整片失效。
-      // 正式環境 agent_sandbox_mode='all'（走容器），所以今天不會發生；**但把沙箱模式關掉
-      // 就會靜默發生**。真要補，做法是讓呼叫端先 await 解析好、以 opts 傳進來，而不是在這裡查。
-      env: { ...process.env, SECURITY_GUIDANCE_DISABLE: '1', CLAUDE_CODE_PROMPT_CACHE_TTL: '5m', ...getClaudeAuthEnv(), ...aiTokenEnv(), ...aiBaseEnv(), ...(env || {}) },
     };
 
     // SIGTERM 後寬限期未退出就升級 SIGKILL：claude 掛死不理 SIGTERM 時避免殭屍行程佔資源。
@@ -374,14 +345,13 @@ function runClaude(prompt, opts = {}) {
             // 續接的 session 不在（換到容器後 HOME 不同、或 CLI 清掉舊檔）。呼叫端本來就會降級 fresh；
             // 這裡只負責把原因標清楚，並在時間軸留一行（analysis／spec_tour 自己寫，帶 logSessionMissing:false）
             if (taskId && opts.logSessionMissing !== false) {
+              // 只剩容器一條路，所以原因只有一種寫法（家目錄在容器裡、與舊的宿主 session 不同源）。
               query("INSERT INTO task_logs (task_id, role, content) VALUES ($1, 'ai', $2)",
-                [taskId, sandboxRun
-                  ? '[續接] 上一輪對話的 session 已不存在（多半是 AI 改在容器內執行、家目錄換了），本輪改以完整脈絡重跑'
-                  : '[續接] 上一輪對話的 session 已不存在（可能已被清除），本輪改以完整脈絡重跑']).catch(() => {});
+                [taskId, '[續接] 上一輪對話的 session 已不存在（AI 在容器內執行，家目錄與上一輪不同源），本輪改以完整脈絡重跑']).catch(() => {});
             }
             reject(fail(new Error(`找不到要續接的 session（${resumeSessionId}）：${missing}`), 'session_missing'));
           }
-          else if (sandboxRun && code === OOM_EXIT_CODE) {
+          else if (code === OOM_EXIT_CODE) {
             const mem = getSandboxLimits().memory || '（未設定）';
             reject(fail(new Error(`AI 容器被強制終止（exit ${code}），最可能是超過記憶體上限 ${mem}；已分類為環境問題、不自動重試`), 'oom'));
           }
@@ -406,15 +376,11 @@ function runClaude(prompt, opts = {}) {
       });
     });
     child.on('error', err => {
-      // spawn 的 ENOENT 有兩種來源、無法從 err 本身區分：cwd 目錄不存在，或 PATH 找不到 claude。
-      // cwd（多為任務 worktree）不存在最常見於「停在早期階段的任務被 resume」時 worktree 尚未建立——
-      // 別再誤報成找不到 claude，據 cwd 是否存在給正確歸因。
+      // 只剩容器一條路，spawn 的對象一律是 docker CLI，所以 ENOENT 只有一種意思。
+      // （舊路徑那個「cwd 不存在 vs 找不到 claude」的兩義歸因已不適用：工作目錄改由
+      //   docker --workdir 指定，掛載失敗會在 prepareSandboxRun 就被擋下，到不了這裡。）
       if (err.code === 'ENOENT') {
-        err.message = sandboxRun
-          ? '找不到 docker 執行檔（容器模式需要平台容器內的 docker CLI）'
-          : (cwd && !fs.existsSync(cwd))
-            ? `工作目錄不存在（worktree 可能尚未建立或已清除）：${cwd}`
-            : '找不到 claude 執行檔（PATH 未含 claude 安裝目錄），請確認 claude CLI 可用';
+        err.message = '找不到 docker 執行檔（AI 一律在容器內執行，平台容器內必須有 docker CLI）';
       }
       finish(() => reject(fail(err, 'error')));
     });
@@ -423,17 +389,18 @@ function runClaude(prompt, opts = {}) {
       child.stdin.end();
     };
 
-    // 舊路徑：spawn 選項與原本逐字相同（見上方 legacyOpts）
-    const startLegacy = () => attachChild(spawn('claude', args, legacyOpts));
-    // 開關 off 必須「同步」spawn（rules/testing 26）：呼叫端與既有測試都依賴「runClaude 回傳時子行程已起」
-    if (getSandboxMode() === 'off') { startLegacy(); return; }
-    // 容器路徑（子專案 0）：開關有涵蓋就只能走容器。準備失敗一律 reject，
-    // **禁止**退回 spawn('claude')——那等於靜默取消隔離（規格 §6、rules/pipeline 59）
+    // **只有容器一條路**（2026-09-24 使用者裁決拿掉舊路徑，3.11／重啟批次 R-C）。
+    //
+    // 拿掉之前那條 `spawn('claude', args, legacyOpts)` 其實早就跑不到了：開關自 09-18 起是
+    // `all`，而 sandboxAppliesTo 在 all 模式下無條件回 true。留著它的代價不是效能，是它讓
+    // 「把開關撥回 off 就能繞過隔離」這件事一直是可能的——而那條路用的是平台訂閱，
+    // 客戶的 AI 跑在上面不會報錯，只會出現在月底帳單上（claude-auth.js 檔頭記過這個缺口）。
+    //
+    // 準備失敗一律 reject，**禁止**退回 spawn('claude')——那等於靜默取消隔離（規格 §6）。
     const sr = require('./sandbox-run');
     sr.resolveSandboxPlan(agentType, opts)
       .then(async plan => {
         if (settled) return;
-        if (!plan) { startLegacy(); return; }
         const run = await sr.prepareSandboxRun({ claudeArgs: args, opts, profile: plan.profile, projectId: plan.projectId });
         sandboxRun = run;
         // 準備期間就被按停止：不要再 spawn，直接把通行證與 worktree 收掉

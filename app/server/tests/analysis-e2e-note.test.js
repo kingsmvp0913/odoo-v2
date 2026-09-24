@@ -30,6 +30,13 @@ jest.mock('../pipeline/merge-agent', () => ({
   SYNC_LABELS: { oursLabel: 'ai-dev（AI 現況）', theirsLabel: 'main（工程師新進）' }
 }));
 jest.mock('child_process', () => ({ spawn: jest.fn() }));
+// AI 一律在容器裡跑（2026-09-24 拿掉舊的非容器路徑）：runClaude 只剩「準備容器 → spawn docker」
+// 一條路，真品會查 DB、驗映像檔、發通行證，單元測試跑不動。只換掉那兩支，waitForWorktreeIdle
+// 留真品（這支測的等容器行為就是它）。容器路徑本身由 sandbox-run.test.js 對真品驗。
+jest.mock('../pipeline/sandbox-run', () => ({
+  ...jest.requireActual('../pipeline/sandbox-run'),
+  ...require('./_sandbox-run-mock')(),
+}));
 
 let dbModule, runTaskAnalysis, loadAgent, invalidate;
 let userId, projectId;
