@@ -50,9 +50,9 @@ test('名稱帶實例 id', () => {
   expect(infra.agentImageTag('2.1.266')).toBe('aidev-agent:2.1.266');
 });
 
-test('映像檔不存在 → 丟例外並附 build 指令，不建網路也不起閘道', async () => {
+test('映像檔不存在 → 丟例外請管理員重啟（start.sh 會補建），不建網路也不起閘道', async () => {
   const d = fakeDocker({ image: false });
-  await expect(infra.ensureAgentInfra(deps(d))).rejects.toThrow(/aidev-agent:2\.1\.266[\s\S]*docker build/);
+  await expect(infra.ensureAgentInfra(deps(d))).rejects.toThrow(/claude 版本已更新（2\.1\.266）[\s\S]*重啟平台/);
   expect(d.calls.some(c => c[1] === 'network' && c[2] === 'create')).toBe(false);
   expect(d.calls.some(c => c[1] === 'run')).toBe(false);
 });

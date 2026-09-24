@@ -47,9 +47,9 @@ async function ensureAgentInfra(deps = {}) {
   const image = agentImageTag(version);
   try { await run(execFile, 'docker', ['image', 'inspect', image]); }
   catch {
-    throw new Error(`AI 映像檔 ${image} 不存在（claude 升版後 tag 會跟著變，舊映像不會被用到）。`
-      + `請在主機執行 node scripts/setup.js --skip-start 自動補建，或手動：docker build -f docker/agent/Dockerfile `
-      + `--build-arg CLAUDE_CODE_VERSION=${version} --build-arg CONTEXT7_MCP_VERSION=<app/node_modules/@upstash/context7-mcp 的版本> -t ${image} docker/agent`);
+    // 給管理員看得懂的下一步，不是 build 指令：claude 自己升版時 tag 跟著變，舊映像作廢，
+    // 而 start.sh 每次啟動都會補建缺的映像（見該檔），所以「重啟」就是正解。
+    throw new Error(`claude 版本已更新（${version}），請管理員重啟平台`);
   }
 
   try { await run(execFile, 'docker', ['network', 'inspect', network]); }

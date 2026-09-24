@@ -73,6 +73,18 @@ if [ ! -f "$_MARKER" ] || { [ -f "$_LOCK" ] && [ "$_LOCK" -nt "$_MARKER" ]; }; t
   ( cd "$ROOT/app" && npm install --prefer-offline )
 fi
 
+# claude 會自行升版（npm i -g latest），而 AI 沙盒映像的 tag 綁 claude 版本——升版後舊映像再也不會
+# 被用到，每一次 AI 呼叫都失敗，且只在執行期才看得到。故每次啟動確認一次，讓 agent-infra.js 那句
+# 「請管理員重啟平台」真的能解決問題。已存在時只是一次 docker images -q；缺了才建（要數分鐘）。
+# 沒 docker（宿主直跑模式）或建置失敗都不擋啟動——平台本身仍可用，缺的只是 AI 的容器隔離模式。
+if command -v docker >/dev/null 2>&1; then
+  node -e "
+    const { ensureAgentImage } = require('./scripts/lib/docker');
+    const r = ensureAgentImage();
+    console.log('[start] AI 沙盒映像 ' + r.image + (r.built ? ' 已建置' : ' 已存在'));
+  " || echo "[start] 警告：AI 沙盒映像補建失敗，沙盒模式不是 off 時 AI 會全部失敗" >&2
+fi
+
 _port="$(read_config PORT)"; _url="http://localhost:${_port:-3939}"
 if command -v xdg-open &>/dev/null; then xdg-open "$_url" 2>/dev/null &
 elif command -v open &>/dev/null; then open "$_url" 2>/dev/null &
