@@ -16,6 +16,7 @@ const { buildGitEnvFromPat } = require('./lib/git-identity');
 const { listRemoteBranchesByUrl } = require('./pipeline/git');
 const { abortCompanyTasks } = require('./pipeline/runner');
 const { validTaskBudgetUsd } = require('./lib/task-budget');
+const { setCompanyAnthropicKey, clearCompanyAnthropicKey } = require('./lib/company-anthropic-key');
 
 const auth = [verifyToken, requirePlatformAdmin];
 
@@ -224,57 +225,23 @@ function registerRoutes(app) {
   //
   // ⚠ 驗證必須用候選 key 而非資料庫裡的舊值，否則換 key 等於沒驗。sandbox-run 的呼叫端覆寫
   // 在收到 ANTHROPIC_API_KEY 時會把平台那把刪掉，所以驗到的一定是這一把。
+  // 兩支都只是薄殼：規則本體在 lib/company-anthropic-key.js，因為公司管理員那邊
+  // （company-routes.js）也有同一組入口，規則必須是同一份（2026-09-24 裁決「兩邊都要能填」）。
   app.put('/api/admin/companies/:id/anthropic-key', auth, async (req, res) => {
     try {
-      const { api_key } = req.body || {};
-      if (!api_key) return res.status(400).json({ error: '請貼上 Anthropic API key' });
-      if (!process.env.APP_SECRET) return res.status(500).json({ error: '伺服器未設定 APP_SECRET，無法安全存放 key' });
-
-      const { rows: co } = await query('SELECT id, is_internal FROM companies WHERE id = $1', [req.params.id]);
-      if (!co.length) return res.status(404).json({ error: '找不到這家公司' });
-      // 內部公司用平台的訂閱付錢（companies.is_internal 的欄位註解），不該有自己的 key。
-      // 擋下來而不是照存：存了也永遠不會被用到，只會讓人以為設定生效了。
-      if (co[0].is_internal === true) {
-        return res.status(400).json({ error: '內部公司用平台的訂閱執行 AI，不需要也不會使用自己的 API key' });
-      }
-
-      // 錯誤政策照抄 saveClaudeToken，理由一字不差地適用：認證失敗＝貼錯或已撤銷，擋下；
-      // 非認證失敗（API 過載、網路抖動）仍然存——換 key 的時機往往正是服務不穩的時候，
-      // 一次 529 就把人鎖在外面是更糟的失敗模式。據實回報沒驗成功。
-      let warning = null;
-      try {
-        const { runClaude } = require('./pipeline/claude-runner');
-        const { looksLikeAuthFailure } = require('./pipeline/auth-signature');
-        try {
-          // userId 帶發起的平台管理員：那是 AI 執行授權（canRun）的依據，
-          // 全樹守衛 runagent-userid-guard 會擋下漏帶的呼叫。憑證本身由上面的 env 覆寫決定，
-          // 與 userId 解析出來的那把無關——所以這裡不會驗到平台那把。
-          await runClaude('回覆 ok', { env: { ANTHROPIC_API_KEY: api_key }, timeoutMs: 60000, agentType: 'auth_probe', userId: req.userId });
-        } catch (err) {
-          if (err.claudeStatus === 'auth' || looksLikeAuthFailure(err.message)) {
-            return res.status(400).json({ error: 'API key 無效或已撤銷，未儲存' });
-          }
-          warning = `已儲存，但驗證未能完成：${err.message}`;
-        }
-      } catch (err) {
-        warning = `已儲存，但驗證未能執行：${err.message}`;
-      }
-
-      await query('UPDATE companies SET anthropic_key_enc=$2, updated_at=NOW() WHERE id=$1',
-        [req.params.id, encrypt(api_key)]);
+      const { warning } = await setCompanyAnthropicKey({
+        companyId: req.params.id, apiKey: (req.body || {}).api_key, actorUserId: req.userId });
       res.json({ ok: true, warning });   // 刻意不回 key，也不回密文
-    } catch (err) { res.status(500).json({ error: err.message }); }
+    } catch (err) {
+      if (err.code === 'COMPANY_KEY') return res.status(err.status).json({ error: err.message });
+      res.status(500).json({ error: err.message });
+    }
   });
 
-  // 清掉之後這家公司的 AI 會直接跑不起來（buildClaudeAuthEnv 丟 NO_ANTHROPIC_KEY），
-  // 不會悄悄改用平台的訂閱——那是刻意的，見 lib/claude-auth.js。
   app.delete('/api/admin/companies/:id/anthropic-key', auth, async (req, res) => {
     try {
-      const { rows } = await query(
-        'UPDATE companies SET anthropic_key_enc=NULL, updated_at=NOW() WHERE id=$1 RETURNING id',
-        [req.params.id]
-      );
-      if (!rows.length) return res.status(404).json({ error: '找不到這家公司' });
+      const found = await clearCompanyAnthropicKey(req.params.id);
+      if (!found) return res.status(404).json({ error: '找不到這家公司' });
       res.status(204).end();
     } catch (err) { res.status(500).json({ error: err.message }); }
   });

@@ -10,6 +10,7 @@ const { verifyToken } = require('./auth');
 const { hashPassword } = require('./password');
 const { canManageCompanyUsers, ROLES } = require('./lib/tenant-access');
 const { validTaskBudgetUsd } = require('./lib/task-budget');
+const { setCompanyAnthropicKey, clearCompanyAnthropicKey, companyKeyConfigured } = require('./lib/company-anthropic-key');
 
 // 公司管理員能指派的角色。刻意不含 admin——公司管理員能建平台管理員的話，
 // 等於任何一家客戶都能替自己開一個全平台的後門。
@@ -62,6 +63,48 @@ function registerRoutes(app) {
         [companyId, amount]
       );
       res.json({ task_budget_usd: rows[0].task_budget_usd });
+    } catch (err) { res.status(500).json({ error: err.message }); }
+  });
+
+  // 公司管理員自己換 Anthropic API key（2026-09-24 裁決「兩邊都要能填」）。
+  //
+  // 為什麼客戶這邊也要有：key 會過期、會被旋轉，每次都得找平台代填等於把客戶卡在我們的
+  // 工時上；而客戶公司沒有有效的 key 時，他們的每一個 AI 動作都直接失敗
+  // （buildClaudeAuthEnv 丟 NO_ANTHROPIC_KEY，刻意不退回平台訂閱）。
+  //
+  // 規則本體在 lib/company-anthropic-key.js，與平台管理員那組共用同一份——兩份一定分岔，
+  // 而分岔的症狀是「同一把壞 key，從這個入口被擋、從那個入口存進去了」。
+  //
+  // ⚠ 公司 id 一律走 myCompany（＝req.actor.companyId），**不收任何參數**：
+  // 收了就等於讓公司管理員填別家公司的 key。見本檔檔頭。
+  app.get('/api/company/anthropic-key', verifyToken, async (req, res) => {
+    const companyId = myCompany(req, res); if (!companyId) return;
+    try {
+      res.json(await companyKeyConfigured(companyId));   // 只回「有沒有設」
+    } catch (err) {
+      if (err.code === 'COMPANY_KEY') return res.status(err.status).json({ error: err.message });
+      res.status(500).json({ error: err.message });
+    }
+  });
+
+  app.put('/api/company/anthropic-key', verifyToken, async (req, res) => {
+    const companyId = myCompany(req, res); if (!companyId) return;
+    try {
+      const { warning } = await setCompanyAnthropicKey({
+        companyId, apiKey: (req.body || {}).api_key, actorUserId: req.userId });
+      res.json({ ok: true, warning });
+    } catch (err) {
+      if (err.code === 'COMPANY_KEY') return res.status(err.status).json({ error: err.message });
+      res.status(500).json({ error: err.message });
+    }
+  });
+
+  app.delete('/api/company/anthropic-key', verifyToken, async (req, res) => {
+    const companyId = myCompany(req, res); if (!companyId) return;
+    try {
+      const found = await clearCompanyAnthropicKey(companyId);
+      if (!found) return res.status(404).json({ error: '找不到所屬公司' });
+      res.status(204).end();
     } catch (err) { res.status(500).json({ error: err.message }); }
   });
 
