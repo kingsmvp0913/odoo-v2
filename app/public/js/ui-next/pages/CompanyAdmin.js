@@ -531,9 +531,18 @@
               <span class="pill" :class="readiness.done === readiness.total ? 'pill-success' : 'pill-warn'">{{ readiness.done }} / {{ readiness.total }}</span>
             </h2>
             <p v-if="!pendingSteps.length" class="ui-next-field-note">八個步驟都完成了，可以交給客戶。</p>
-            <p v-for="s in pendingSteps" :key="s.key" class="ui-next-field-note">
-              <strong>{{ s.label }}</strong>——{{ s.hint }}
-            </p>
+            <!-- 未完成項原本整串（項目名與提示）都套 .ui-next-field-note＝11px muted，
+                 一塊灰字裡沒有層次，也看不出那是「還沒做的」還是「已經做完的」。
+                 改成清單：項目名走本文字級、提示走 muted，前面掛一顆空心圈當未完成標記。 -->
+            <template v-else>
+              <p class="ui-next-field-note">還差這 {{ pendingSteps.length }} 項：</p>
+              <ul class="ui-next-readiness-list">
+                <li v-for="s in pendingSteps" :key="s.key">
+                  <strong>{{ s.label }}</strong>
+                  <span>{{ s.hint }}</span>
+                </li>
+              </ul>
+            </template>
           </section>
 
           <!-- 四個分頁一比一對應原本直排的四個區塊。切分頁不動任何資料：四份表單都還在

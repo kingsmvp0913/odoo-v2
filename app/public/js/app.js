@@ -100,7 +100,10 @@ const ForbiddenView = {
   // 整個退役時連同 CSS 一起刪了，於是這頁從那天起一直是完全沒有樣式的裸 HTML
   // （瀏覽器預設 h1、藍色底線連結、貼齊左上角），而它是客戶亂點時最常撞到的一頁。
   // 沒有任何測試會紅——class 不存在不是語法錯誤。改用與其他頁相同的 .ui-next-page 外殼。
-  template: `<section class="ui-next-page" aria-labelledby="forbidden-title"><header class="ui-next-page-head"><div><h1 id="forbidden-title">403：沒有存取權限</h1><p>你的帳號沒有權限使用這個頁面。如果你認為應該有權限，請聯絡貴公司的管理員。</p><button class="btn btn-primary btn-sm" @click="$router.push('/')">返回首頁</button></div></header></section>`,
+  // ⚠ 返回鍵放在 <header> **外面**：全域 reset 把 <p> 的外距清成 0，擺在 header 裡的話
+  // 按鈕會直接黏在說明文字下緣（2026-09-24 實機截圖）。移出來就吃得到 .ui-next-page-head
+  // 自己的 margin-bottom，不必為一顆按鈕另外補 CSS。
+  template: `<section class="ui-next-page" aria-labelledby="forbidden-title"><header class="ui-next-page-head"><div><h1 id="forbidden-title">403：沒有存取權限</h1><p>你的帳號沒有權限使用這個頁面。如果你認為應該有權限，請聯絡貴公司的管理員。</p></div></header><button class="btn btn-primary btn-sm" @click="$router.push('/')">返回首頁</button></section>`,
 };
 
 const router = createRouter({

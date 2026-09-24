@@ -1996,8 +1996,30 @@ html[data-theme="dark"] .ui-next-shell{--ui-next-composer-bg:color-mix(in srgb,#
 .ui-next-company-admin-page .ui-next-panel .error-msg{margin:0}
 /* 「← 返回列表」與底下的公司名稱之間要有一口氣，否則兩者黏成一塊。 */
 .ui-next-company-admin-page .ui-next-company-back{margin-bottom:var(--space-3)}
-/* 標題旁的「內部公司」標籤：h1 是 30px，不對齊會掉到基線下面去。 */
-.ui-next-company-admin-page h1 .pill{margin-left:var(--space-2);vertical-align:middle}
+/* 標題旁的「內部公司」標籤：h1 是 30px，不對齊會掉到基線下面去。
+   h2 一起納入：2026-09-24 的「開通進度 5/8」把同一顆 pill 掛到 16px 的 h2 上，
+   原本只釘 h1 的話那顆就沒有間距也沒有對齊，貼著標題掉在基線下。 */
+.ui-next-company-admin-page h1 .pill,
+.ui-next-company-admin-page h2 .pill{margin-left:var(--space-2);vertical-align:middle}
+/* 開通進度的未完成項：原本項目名與提示都套 .ui-next-field-note（11px、var(--text-muted)），
+   整段是同一塊灰字——這張表要回答「還差什麼」，它的主要內容卻用註腳的份量在排。
+   分兩層字級（項目名走本文、提示走 muted），前面掛一顆空心圈當「未完成」標記。 */
+.ui-next-readiness-list{display:flex;flex-direction:column;gap:var(--space-2);margin:0;padding:0;list-style:none}
+.ui-next-readiness-list li{display:grid;grid-template-columns:auto minmax(0,1fr);gap:var(--space-1) var(--space-2)}
+.ui-next-readiness-list li::before{content:"";width:9px;height:9px;margin-top:5px;border:1.5px solid var(--warning);border-radius:50%}
+.ui-next-readiness-list strong{font-size:var(--fs-base);font-weight:var(--fw-semibold);color:var(--text)}
+.ui-next-readiness-list span{grid-column:2;color:var(--text-muted);font-size:var(--fs-xs);line-height:1.55}
+/* 說明文字裡的 <code>（claude setup-token）：全站只有 .modal-body／.chat-md 底下的 code
+   有樣式，這兩頁的沒有，於是它只是一段換了字體的灰字，跟前後文分不出來。
+   配方直接沿用 .modal-body code，不另立第二套。 */
+.ui-next-company-admin-page code,
+.ui-next-company-users-page code{padding:1px 5px;border:1px solid var(--border);border-radius:var(--radius-sm);background:var(--bg);color:var(--text);font-size:var(--fs-sm)}
+/* 公司帳號頁的設定卡：全域 reset 把 <p> 的外距清成 0，憑證那一塊有三段說明＋一個欄位，
+   整塊黏成一片灰字，看不出說明在哪裡結束、表單從哪裡開始。間距統一由卡片給
+   （同上面 .ui-next-company-admin-page .ui-next-panel 的做法），不要在模板裡逐段補。 */
+.ui-next-company-users-page .settings-section{display:flex;flex-direction:column;gap:var(--space-2)}
+.ui-next-company-users-page .settings-section .section-title,
+.ui-next-company-users-page .settings-section .error-msg{margin-bottom:0}
 /* 開關本身只有 18px 高，跟同一條 grid 列裡的輸入框（33px）並排時那一格會塌一塊。
    跟 .field-input 一樣用 padding 撐，不寫死高度——字級一變，寫死的高度就脫節。 */
 .ui-next-company-admin-page .conn-fields .ui-next-toggle{padding:var(--space-2) 0}

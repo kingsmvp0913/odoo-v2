@@ -214,7 +214,9 @@
           <p class="ui-next-field-note">
             <strong>沒有設定或清除之後，貴公司的 AI 會直接停止運作。</strong>
           </p>
-          <div class="field-item">
+          <!-- field-item-md（420px）：同頁的花費上限是 220px 的窄欄，這一格原本整條卡片寬，
+               兩塊相鄰的設定看起來不像同一套。420px 那一檔本來就是給 PAT 這類長憑證用的。 -->
+          <div class="field-item field-item-md">
             <label class="field-label" for="company-anthropic-key">Claude 認證憑證</label>
             <input id="company-anthropic-key" v-model="keyInput" type="password" class="field-input" placeholder="重新貼上完整的憑證才會更新" />
           </div>
