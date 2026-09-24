@@ -816,6 +816,13 @@ async function migrate() {
       created_at   TIMESTAMPTZ DEFAULT NOW(),
       updated_at   TIMESTAMPTZ DEFAULT NOW()
     )`,
+    `CREATE TABLE IF NOT EXISTS company_expiry_notices (
+      company_id  INTEGER NOT NULL REFERENCES companies(id) ON DELETE CASCADE,
+      active_until TIMESTAMPTZ NOT NULL,
+      days_before  INTEGER NOT NULL,
+      sent_at      TIMESTAMPTZ DEFAULT NOW(),
+      PRIMARY KEY (company_id, active_until, days_before)
+    )`,
     `CREATE TABLE IF NOT EXISTS project_companies (
       -- CASCADE 是必要的：不帶會讓「刪專案」被外鍵擋死（記憶 spec-trio-executed）。
       -- 公司那一側刻意不帶 CASCADE——公司不刪只停用，誤刪公司不該連帶清掉綁定。

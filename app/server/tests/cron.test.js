@@ -37,6 +37,8 @@ jest.mock('../lib/platform-backup', () => ({
   describeBackups: jest.fn(() => '備份狀態說明（測試哨兵值）')
 }));
 
+jest.mock('../lib/subscription-notices', () => ({ sendExpiryNotices: jest.fn().mockResolvedValue({ sent: 0 }) }));
+
 let dbModule, cronModule, notifyModule;
 let userId;
 
@@ -725,4 +727,14 @@ test('排程頁列出平台 DB 備份（每日 04:00），下次時間與備份�
   expect(item.timing).toMatch(/每日 04:00/);
   expect(item.nextRunAt).toBe('2026-09-15T20:00:00.000Z'); // 今天 04:00 已過 → 明天臺灣 04:00
   expect(item.note).toBe('備份狀態說明（測試哨兵值）');   // 排程頁確實把 describeBackups 的結果帶出來
+});
+
+test('每小時維護會檢查公司使用期間到期提醒', async () => {
+  const { sendExpiryNotices } = require('../lib/subscription-notices');
+  sendExpiryNotices.mockClear();
+  cronModule._setClockForTesting(() => new Date('2026-09-24T04:00:00.000Z'));
+  cronModule.startCron();
+  const tick = require('node-cron').schedule.mock.calls.at(-1)[1];
+  try { await tick(); } finally { cronModule.stopCron(); cronModule._setClockForTesting(null); }
+  expect(sendExpiryNotices).toHaveBeenCalledTimes(1);
 });
