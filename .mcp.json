@@ -6,6 +6,15 @@
         "shadcn@latest",
         "mcp"
       ]
+    },
+    "godui": {
+      "type": "stdio",
+      "command": "npx",
+      "args": [
+        "-y",
+        "@godui/mcp@0.1.0"
+      ],
+      "env": {}
     }
   }
 }
