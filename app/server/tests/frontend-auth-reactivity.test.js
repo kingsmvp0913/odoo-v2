@@ -1,6 +1,35 @@
 const fs = require('fs');
 const path = require('path');
+const vm = require('vm');
 const read = (f) => fs.readFileSync(path.join(__dirname, '../../public', f), 'utf8');
+
+// 把 api.js 真的跑起來，而不是比對它的字。
+//
+// 為什麼改：這支原本斷言原始碼裡出現「authState.loggedIn = true」這幾個字。程式後來
+// 改成 `= !!readToken()`（更嚴謹——setToken('') 不該算成已登入），行為完全正確，守衛
+// 卻紅了。文字比對守得住「寫法」，守不住「意圖」，而紅燈久了就會被當成既有問題放過去。
+//
+// api.js 只需要 Vue.reactive、兩個 storage 與 window 就跑得起來（fetch 只在方法內用到），
+// 所以不需要 Vue mount 那套 infra。
+function loadApi() {
+  const mkStorage = () => {
+    const store = new Map();
+    return {
+      getItem: (k) => (store.has(k) ? store.get(k) : null),
+      setItem: (k, v) => store.set(k, String(v)),
+      removeItem: (k) => store.delete(k),
+    };
+  };
+  const sandbox = {
+    Vue: { reactive: (o) => o },   // 這支測的是「有沒有寫進去」，不是 Vue 的追蹤機制
+    localStorage: mkStorage(),
+    sessionStorage: mkStorage(),
+    window: {},
+    console,
+  };
+  vm.runInNewContext(read('js/api.js'), sandbox, { filename: 'api.js' });
+  return sandbox.window.Api;
+}
 
 // 守的契約：驅動「登入殼層 vs 登入頁」切換的登入狀態必須 reactive。
 // 症狀（1.png）：Api.isLoggedIn() 讀 localStorage（非 reactive），外殼的 isLoggedIn
@@ -17,9 +46,17 @@ describe('登入狀態必須 reactive（表單登入後版面立即切殼層，�
     expect(api).toMatch(/authState:\s*Vue\.reactive/);
   });
 
-  test('setToken／clearToken 皆同步 authState.loggedIn（涵蓋登入、登出、401 清除）', () => {
-    expect(api).toMatch(/setToken\([^)]*\)\s*{[^}]*authState\.loggedIn\s*=\s*true/);
-    expect(api).toMatch(/clearToken\(\)\s*{[^}]*authState\.loggedIn\s*=\s*false/);
+  test('setToken／clearToken 真的同步 authState.loggedIn（涵蓋登入、登出、401 清除）', () => {
+    const Api = loadApi();
+    expect(Api.authState.loggedIn).toBe(false);
+    Api.setToken('jwt-abc');
+    expect(Api.authState.loggedIn).toBe(true);
+    Api.clearToken();
+    expect(Api.authState.loggedIn).toBe(false);
+    // 空字串不該算登入。這正是「寫死成 = true」會漏掉的那一格，也是程式現在寫
+    // `= !!readToken()` 的理由——所以順手把它釘住，免得有人「修好」守衛時改回寫死。
+    Api.setToken('');
+    expect(Api.authState.loggedIn).toBe(false);
   });
 
   test('外殼的 isLoggedIn computed 讀 reactive authState，而非非-reactive 的 Api.isLoggedIn()', () => {

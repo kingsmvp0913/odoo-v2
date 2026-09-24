@@ -86,28 +86,41 @@ describe('前端請求路徑接上 BASE_PATH', () => {
 // setup.html 是獨立頁面（不載入 SPA 的 js），但仍載入同一支 base.js，避免同一段推導邏輯
 // 出現第二份。它的兩處 location.replace('/') 在子路徑下會把人踢到 web-test 的網站根目錄
 // ——那是別的應用，不是平台首頁。
+// 2026-09-23 的資安收斂（commit `9a8f7c3f`）把 setup.html 的頂層 inline script 抽成
+// js/setup.js。行為沒變，但這三條原本在 setup.html 裡找 BASE_PATH，於是從那天起一直紅著，
+// 而它守的東西並沒有消失——只是搬家了。改成讀新位置。
 describe('setup.html', () => {
   test('載入 base.js', () => {
     expect(readPublic('setup.html')).toContain('<script src="js/base.js"></script>');
   });
 
   // index.html 所有 BASE_PATH 用法都包在函式內、runtime 才求值，此時 script 早已載完，順序不 load-bearing。
-  // setup.html 相反：頂層 script block 的 fetch(`${BASE_PATH}...`) 在 <script> 執行當下就立即求值。
+  // setup.js 相反：它第一行就是 fetch(`${BASE_PATH}...`)，在 script 執行當下立即求值。
   // base.js 若排在它後面，第一行就 ReferenceError；setup() 因函式提升仍在，但按下按鈕會在另一處
   // 同樣炸掉，async rejection 無人接手——畫面停在「設定中...」、按鈕永久 disabled，沒有任何錯誤提示。
-  test('base.js 必須先於頂層 script 內第一個 BASE_PATH 用法載入，否則初始設定頁會靜默卡死', () => {
+  test('base.js 必須排在 setup.js 之前，否則初始設定頁會靜默卡死', () => {
     const html = readPublic('setup.html');
-    expect(html.indexOf('js/base.js')).toBeLessThan(html.indexOf('${BASE_PATH}'));
+    const base = html.indexOf('js/base.js');
+    const setup = html.indexOf('js/setup.js');
+    expect(base).toBeGreaterThan(-1);
+    expect(setup).toBeGreaterThan(-1);
+    expect(base).toBeLessThan(setup);
+  });
+
+  // 順序守住了還不夠：setup.js 真的要在頂層就用到 BASE_PATH，這條順序才是 load-bearing。
+  // 少了這一條，哪天 setup.js 把用法都搬進函式裡，上面那條就變成守著一件不重要的事。
+  test('setup.js 頂層第一行就用到 BASE_PATH（這才讓載入順序是 load-bearing）', () => {
+    expect(readPublic('js/setup.js').split('\n')[0]).toContain('${BASE_PATH}');
   });
 
   test('兩處 fetch 皆接上 BASE_PATH', () => {
-    const src = readPublic('setup.html');
+    const src = readPublic('js/setup.js');
     expect(src.match(/fetch\(`\$\{BASE_PATH\}api\//g)).toHaveLength(2);
     expect(src.match(/fetch\(['"]\/api\//g)).toBeNull();
   });
 
   test('完成設定後導回平台首頁而非網站根目錄', () => {
-    const src = readPublic('setup.html');
+    const src = readPublic('js/setup.js');
     expect(src.match(/location\.replace\(BASE_PATH\)/g)).toHaveLength(2);
     expect(src.match(/location\.replace\(['"]\/['"]\)/g)).toBeNull();
   });
