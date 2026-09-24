@@ -46,34 +46,91 @@ const TOKEN_FILE = 'upload-token.json';
 const tokenTtlMs = () => parseInt(process.env.EXAM_TOKEN_TTL_MS || String(3 * 60 * 60 * 1000), 10);
 const tokenPath = dataDir => path.join(dataDir, 'exam', TOKEN_FILE);
 
-// 給畫面用：連「過期了」也要看得到，才講得出「請重新產生」而不是「尚未設定」。
-function peekUploadToken(dataDir) {
-  let raw;
-  try { raw = JSON.parse(fs.readFileSync(tokenPath(dataDir), 'utf8')); } catch { return null; }
-  const token = String(raw && raw.token || '').trim();
-  const expiresAt = Number(raw && raw.expires_at) || 0;
+// **一家公司一把**（規格 2026-09-24-exam-tenant-scope-design.md §3.5）。
+//
+// 原本是全平台一把。客戶開始用考試之後，那等於雙方互相把對方的碼作廢——而症狀是
+// 「我的通行碼昨天還能用」，log 上看不出任何異常。桶子名：內部是 'internal'，
+// 客戶是 company-<id>。名字在組鍵之前先過白名單，免得日後有人把別的來源接進來。
+const INTERNAL_BUCKET = 'internal';
+const BUCKET_RE = /^(internal|company-[1-9]\d*)$/;
+
+// 這個人的碼放在哪一桶。回 null＝算不出來（不是內部、又沒有公司），呼叫端要當錯誤處理，
+// **不可以退到 internal**——那會把內部那把碼交到客戶手上。
+function tokenBucketFor(actor) {
+  if (!actor) return null;
+  if (actor.isPlatformAdmin === true || actor.isInternal === true) return INTERNAL_BUCKET;
+  return Number.isInteger(actor.companyId) ? `company-${actor.companyId}` : null;
+}
+
+function tokenEntry(v) {
+  const token = String((v && v.token) || '').trim();
+  const expiresAt = Number(v && v.expires_at) || 0;
   if (!token || !expiresAt) return null;
-  // issuedBy：用這把碼傳進來的圖算誰的（規格 §3.1）。同時只有一把有效，所以
-  // 「誰產的」就是唯一算得出來的歸屬。升級前產生的碼沒有這一欄 ⇒ null＝內部。
-  const issuedBy = Number.isInteger(raw && raw.issued_by) ? raw.issued_by : null;
+  const issuedBy = Number.isInteger(v && v.issued_by) ? v.issued_by : null;
   return { token, expiresAt, issuedBy, expired: Date.now() >= expiresAt };
 }
 
-// 認證用：過期的一律當作沒有。
-function readUploadToken(dataDir) {
-  const t = peekUploadToken(dataDir);
+// 全部的桶子。讀不到、壞掉、格式不認得一律回 {}（＝尚未產生），不往外拋。
+function allUploadTokens(dataDir) {
+  let raw;
+  try { raw = JSON.parse(fs.readFileSync(tokenPath(dataDir), 'utf8')); } catch { return {}; }
+  if (!raw || typeof raw !== 'object') return {};
+  // 相容 2026-09-24 之前的單一物件格式（全平台一把）：當成內部那一桶。
+  // 舊碼效期只有 3 小時，升級後很快就會被重產取代，所以不做資料搬移。
+  if (typeof raw.token === 'string') {
+    const e = tokenEntry(raw);
+    return e ? { [INTERNAL_BUCKET]: e } : {};
+  }
+  const buckets = (raw.buckets && typeof raw.buckets === 'object') ? raw.buckets : {};
+  const out = {};
+  for (const [k, v] of Object.entries(buckets)) {
+    if (!BUCKET_RE.test(k)) continue;
+    const e = tokenEntry(v);
+    if (e) out[k] = e;
+  }
+  return out;
+}
+
+// 給畫面用：連「過期了」也要看得到，才講得出「請重新產生」而不是「尚未設定」。
+function peekUploadToken(dataDir, bucket = INTERNAL_BUCKET) {
+  if (!bucket) return null;
+  return allUploadTokens(dataDir)[bucket] || null;
+}
+
+// 認證用：拿到一串碼，問它是誰的。回中的那一桶（含 issuedBy 與 expired）。
+// 掃全部桶子而不是只比對「呼叫者那一桶」——呼叫者帶碼進來時還不知道他是誰，
+// 那正是這支要回答的問題。
+function findUploadToken(dataDir, token) {
+  const got = String(token || '').trim();
+  if (!got) return null;
+  for (const [bucket, e] of Object.entries(allUploadTokens(dataDir))) {
+    if (e.token === got) return { bucket, ...e };
+  }
+  return null;
+}
+
+// 認證用的舊介面：過期的一律當作沒有。
+function readUploadToken(dataDir, bucket = INTERNAL_BUCKET) {
+  const t = peekUploadToken(dataDir, bucket);
   return t && !t.expired ? t.token : null;
 }
 
-// 重產＝舊的立刻失效（只留一把有效的鑰匙）。
-function issueUploadToken(dataDir, issuedBy = null) {
+// 重產＝**只有那一桶**的舊碼立刻失效，別家不受影響。
+function issueUploadToken(dataDir, issuedBy = null, bucket = INTERNAL_BUCKET) {
+  if (!BUCKET_RE.test(String(bucket))) throw new Error(`通行碼桶子名稱不合法：${bucket}`);
   fs.mkdirSync(path.join(dataDir, 'exam'), { recursive: true });
   const token = crypto.randomBytes(18).toString('base64url');
   const expiresAt = Date.now() + tokenTtlMs();
   const issued = Number.isInteger(issuedBy) ? issuedBy : null;
-  fs.writeFileSync(tokenPath(dataDir),
-    JSON.stringify({ token, expires_at: expiresAt, issued_by: issued }, null, 2));
-  return { token, expiresAt, issuedBy: issued };
+  // 讀回既有的桶子再合併：整份覆蓋會把別家的碼一起殺掉，而那正是本次要修的問題。
+  const existing = allUploadTokens(dataDir);
+  const buckets = {};
+  for (const [k, e] of Object.entries(existing)) {
+    buckets[k] = { token: e.token, expires_at: e.expiresAt, issued_by: e.issuedBy };
+  }
+  buckets[bucket] = { token, expires_at: expiresAt, issued_by: issued };
+  fs.writeFileSync(tokenPath(dataDir), JSON.stringify({ buckets }, null, 2));
+  return { token, expiresAt, issuedBy: issued, bucket };
 }
 
 // **判斷一律用 req.socket.remoteAddress，絕不可改成看 header／query／body 裡的東西。**
@@ -109,5 +166,6 @@ function validateItem(it, index) {
 
 module.exports = {
   sniffImage, decodeImage, readUploadToken, peekUploadToken, issueUploadToken,
+  allUploadTokens, findUploadToken, tokenBucketFor, INTERNAL_BUCKET,
   isLocal, saveImage, validateItem,
 };

@@ -18,7 +18,8 @@ const { query } = require('./db');
 const { verifyToken } = require('./auth');
 const { requireFeature, companyHasFeature } = require('./lib/company-features');
 const { uploadRoot, readAttachmentFile } = require('./lib/attachments');
-const { decodeImage, sniffImage, readUploadToken, peekUploadToken, issueUploadToken,
+const { decodeImage, sniffImage, peekUploadToken, issueUploadToken,
+  allUploadTokens, findUploadToken, tokenBucketFor,
   isLocal, saveImage, validateItem } = require('./lib/exam/upload');
 const { runQueue } = require('./lib/exam/worker');
 const { listPages, archiveBank } = require('./lib/exam/archive');
@@ -26,6 +27,8 @@ const { optionScores } = require('./lib/exam/score');
 const { readSections, matchToPages, assignByOrder } = require('./lib/exam/sections');
 const { emitAll } = require('./notify');
 const { buildClaudeAuthEnv } = require('./lib/claude-auth');
+const { canSeeBank, bankScopeClause, bankOwnerClause, bankOwnerForUser,
+  requireInternal } = require('./lib/exam/scope');
 
 const MAX_IMAGE_BYTES = parseInt(process.env.EXAM_MAX_IMAGE_BYTES || String(20 * 1024 * 1024), 10);
 const BATCH_BODY_LIMIT = process.env.EXAM_BATCH_BODY_LIMIT || '60mb';
@@ -90,19 +93,23 @@ async function checkExamToken(req, res, next) {
     } catch { /* 壞 token 不放行，往下走 X-Token 那條 */ }
   }
 
-  // 過期與從沒設定過要分得出來：同事看到「尚未設定」會去找管理員要一組全新的，
-  // 而其實他只要請人在作戰台按一下重產。
-  const current = peekUploadToken(dataDir());
-  if (!current) {
+  // 一家公司一把（規格 §3.5），所以要掃全部桶子——帶碼進來的人還沒被認出是誰，
+  // 那正是這一步要回答的問題。
+  //
+  // 三種結果要分得清楚：從沒產生過（503，去找人產一把）、這把碼過期（401，自己重產）、
+  // 碼不對（401）。同事看到「尚未設定」會去找管理員，而其實他只要按一下重產。
+  const all = allUploadTokens(dataDir());
+  if (!Object.keys(all).length) {
     return res.status(503).json({ error: '尚未產生上傳通行碼（請在考試作戰台的「串接說明」產生）' });
   }
-  if (current.expired) {
+  const got = req.get('X-Token') || req.query.token;
+  const hit = findUploadToken(dataDir(), got);
+  if (!hit) return res.status(401).json({ error: '通行碼不對' });
+  if (hit.expired) {
     return res.status(401).json({ error: '通行碼已過期（效期 3 小時），請重新產生' });
   }
-  const got = req.get('X-Token') || req.query.token;
-  if (got !== current.token) return res.status(401).json({ error: '通行碼不對' });
   // 這把碼不屬於任何帳號，但只有登入的人產得出來——所以算產碼的那個人。
-  req.examUserId = current.issuedBy ?? null;
+  req.examUserId = hit.issuedBy ?? null;
   next();
 }
 
@@ -116,14 +123,21 @@ async function checkExamToken(req, res, next) {
  * 「進行中」＝ status <> 'archived'。歸檔是這一場結束的唯一訊號（archive.js 寫的），
  * 所以歸檔之後再傳圖會自動開下一場，這正是連考兩次時想要的行為。
  */
-async function resolveBank(bankRef) {
+//
+// ⚠ **owner 是必填的第二個參數**（規格 §3.4）。少了它，客戶傳的第一張圖就會落進
+// 內部正在進行的那一場，而且沒有任何徵狀——內部同事會在自己的作戰台上看到不認識
+// 的題目，客戶則以為自己傳成功了。指定 bank 的那條路同樣要限縮：否則客戶帶一個
+// 內部的 bank id 或 label 就直接寫進去了。
+async function resolveBank(bankRef, owner) {
+  const mine = (col, idx) => bankOwnerClause(owner, col, idx);
   if (bankRef) {
     const asId = parseInt(bankRef, 10);
     const byId = Number.isInteger(asId) && String(asId) === String(bankRef);
+    const o = mine('company_id', 2);
     const sql = byId
-      ? `SELECT id, label, odoo_version FROM exam_banks WHERE id = $1`
-      : `SELECT id, label, odoo_version FROM exam_banks WHERE label = $1 ORDER BY id DESC LIMIT 1`;
-    const { rows } = await query(sql, [byId ? asId : bankRef]);
+      ? `SELECT id, label, odoo_version FROM exam_banks WHERE id = $1 AND ${o.sql}`
+      : `SELECT id, label, odoo_version FROM exam_banks WHERE label = $1 AND ${o.sql} ORDER BY id DESC LIMIT 1`;
+    const { rows } = await query(sql, [byId ? asId : bankRef, ...o.params]);
     return rows[0] || null;
   }
 
@@ -135,32 +149,40 @@ async function resolveBank(bankRef) {
   // 用 NOT IN 而不是相關子查詢（pg-mem 不支援後者，測試環境會炸而正式環境好）；
   // 子查詢必須加 IS NOT NULL——真 PG 裡 NOT IN 清單含一個 NULL 就整條恆為
   // UNKNOWN，查詢會靜默全失效（專案規則 testing.md #14）。
+  const openScope = mine('company_id', 1);
   const open = (await query(
     `SELECT id, label, odoo_version FROM exam_banks
       WHERE status <> 'archived'
+        AND ${openScope.sql}
         AND id NOT IN (SELECT bank_id FROM exam_sections WHERE bank_id IS NOT NULL)
-      ORDER BY id DESC LIMIT 1`)).rows[0];
+      ORDER BY id DESC LIMIT 1`, openScope.params)).rows[0];
   if (open) return open;
 
   // 版本沿用最近一場：題庫是按 odoo_version 分池的（見 exam_items 的 UNIQUE），
   // 猜錯版本會讓這一場的題目跟既有題庫完全對不起來，而畫面上看不出原因。
+  // 版本也只沿用自己這邊最近一場：撈到別家的版本，這一場的題目會跟自己的題庫池
+  // 對不起來（exam_items 是按 odoo_version 分池的），而畫面上看不出原因。
+  const lastScope = mine('company_id', 1);
   const last = (await query(
-    `SELECT odoo_version FROM exam_banks ORDER BY id DESC LIMIT 1`)).rows[0];
+    `SELECT odoo_version FROM exam_banks WHERE ${lastScope.sql} ORDER BY id DESC LIMIT 1`,
+    lastScope.params)).rows[0];
   const version = (last && last.odoo_version) || '19';
   const label = new Date().toISOString().slice(0, 10);
   // 同版本同名時補序號：同一天考兩場（前一場已歸檔）不該撞名，
   // 而 label 是外部指定題庫的鍵，重名會讓圖靜靜落到別場去。
   let tryLabel = label;
   for (let n = 2; n < 50; n++) {
+    const dupScope = mine('company_id', 3);
     const dup = (await query(
-      `SELECT id FROM exam_banks WHERE label = $1 AND odoo_version = $2`, [tryLabel, version])).rows[0];
+      `SELECT id FROM exam_banks WHERE label = $1 AND odoo_version = $2 AND ${dupScope.sql}`,
+      [tryLabel, version, ...dupScope.params])).rows[0];
     if (!dup) break;
     tryLabel = `${label}-${n}`;
   }
   const { rows } = await query(`
-    INSERT INTO exam_banks (label, odoo_version, status, taken_at)
-    VALUES ($1, $2, 'ready', CURRENT_DATE)
-    RETURNING id, label, odoo_version`, [tryLabel, version]);
+    INSERT INTO exam_banks (label, odoo_version, status, taken_at, company_id)
+    VALUES ($1, $2, 'ready', CURRENT_DATE, $3)
+    RETURNING id, label, odoo_version`, [tryLabel, version, owner ?? null]);
   return rows[0];
 }
 
@@ -191,6 +213,23 @@ async function insertUpload({ bankId, batchKey, batchLabel, page, answer, imageP
 
 // 章節名前後空白會讓「同一章」變成兩章（'Sales ' ≠ 'Sales'），而畫面上看不出差別。
 const sectionValue = v => (v == null ? null : String(v).trim() || null);
+
+/**
+ * 這次要動的場次，呼叫者看得到嗎（規格 §3.2）。
+ *
+ * 看不到一律 **404 不是 403**：403 等於告訴對方「這個 id 存在，只是你不能看」，
+ * 別家公司可以拿「打到 403 還是 404」當 oracle 掃出場次 id。訊息也與「真的不存在」
+ * 逐字相同，否則訊息本身就是那個 oracle。
+ *
+ * 回 true 才可以往下走。刻意做成「呼叫端一行」而不是中介層：場次 id 的來源每支都
+ * 不一樣（body.bank／params.id／query.bank／從 upload 或 attempt 反查），中介層要嘛
+ * 得吃一個取值函式、要嘛得猜，兩種都比這一行難讀。
+ */
+async function ensureBankVisible(req, res, bankId) {
+  if (await canSeeBank(req.actor, bankId)) return true;
+  res.status(404).json({ error: '找不到題庫' });
+  return false;
+}
 
 // '1' / 'true' / 'yes' / 'on' 為測試資料，其餘與未帶一律正式。
 // 統計數字若把測試混進去，「不一致 N 筆」這個唯一要看的數字就沒用了。
@@ -247,15 +286,20 @@ function registerRoutes(app) {
   // 通行碼的查詢與重產。**走 verifyToken，不走 checkExamToken**——拿舊碼換新碼
   // 等於永不過期，3 小時效期就白設了。要新的一律得有平台帳號。
   app.get('/api/exam/upload-token', verifyToken, requireFeature('exam'), (req, res) => {
-    const t = peekUploadToken(dataDir());
+    const bucket = tokenBucketFor(req.actor);
+    if (!bucket) return res.status(400).json({ error: '這個帳號沒有公司，無法產生通行碼' });
+    const t = peekUploadToken(dataDir(), bucket);
     if (!t) return res.json({ exists: false });
     // 過期的不吐值：貼出去也用不了，只會讓人以為還能用
     res.json({ exists: true, expired: t.expired, expires_at: t.expiresAt, token: t.expired ? null : t.token });
   });
 
   app.post('/api/exam/upload-token', verifyToken, requireFeature('exam'), (req, res) => {
-    // 記下發放者：拿這把碼上傳的圖，AI 就用他所屬公司的憑證跑。
-    const t = issueUploadToken(dataDir(), req.userId);
+    // 記下發放者：拿這把碼上傳的圖，AI 就用他所屬公司的憑證跑、也落在他公司的場次。
+    // 重產只作廢自己那一桶——原本是全平台一把，客戶重產會把內部的碼一起殺掉。
+    const bucket = tokenBucketFor(req.actor);
+    if (!bucket) return res.status(400).json({ error: '這個帳號沒有公司，無法產生通行碼' });
+    const t = issueUploadToken(dataDir(), req.userId, bucket);
     res.json({ token: t.token, expires_at: t.expiresAt });
   });
 
@@ -277,7 +321,7 @@ function registerRoutes(app) {
 
       // 開場排在所有檢查之後：resolveBank 沒有進行中的場次會自動開一場，
       // 排在前面的話傳失敗一次就多一場 0 題的考試掛在列表上。
-      const bank = await resolveBank(req.body.bank);
+      const bank = await resolveBank(req.body.bank, await bankOwnerForUser(req.examUserId));
       if (!bank) return res.status(400).json({ error: `找不到題庫「${req.body.bank}」` });
 
       const imagePath = saveImage({ uploadRoot: uploadRoot(), bankId: bank.id, buf: req.file.buffer, ext });
@@ -317,7 +361,7 @@ function registerRoutes(app) {
         return res.status(400).json({ error: '每一筆都有問題，這批沒有收下任何一筆', rejected });
       }
 
-      const bank = await resolveBank(req.body.bank);
+      const bank = await resolveBank(req.body.bank, await bankOwnerForUser(req.examUserId));
       if (!bank) return res.status(400).json({ error: `找不到題庫「${req.body.bank}」` });
 
       const accepted = [];
@@ -354,6 +398,7 @@ function registerRoutes(app) {
   app.post('/api/exam/run', verifyToken, requireFeature('exam'), express.json(), async (req, res) => {
     const bankId = parseInt(req.body.bank, 10);
     if (!Number.isInteger(bankId)) return res.status(400).json({ error: '缺少 bank' });
+    if (!await ensureBankVisible(req, res, bankId)) return;
 
     const busy = (await query(
       `SELECT id, phase, pages_done, pages_total, started_at FROM exam_jobs
@@ -389,6 +434,7 @@ function registerRoutes(app) {
   app.post('/api/exam/banks/:id/pause', verifyToken, requireFeature('exam'), express.json(), async (req, res) => {
     const bankId = parseInt(req.params.id, 10);
     if (!Number.isInteger(bankId)) return res.status(400).json({ error: '缺少 bank' });
+    if (!await ensureBankVisible(req, res, bankId)) return;
     const paused = !!req.body.paused;
     const { rows } = await query(
       `UPDATE exam_banks SET paused = $2 WHERE id = $1 RETURNING id, paused`, [bankId, paused]);
@@ -405,28 +451,33 @@ function registerRoutes(app) {
 
   // 工作歷程。進度的真相在這裡，socket 廣播只是讓開著頁面的人即時看到——
   // 廣播錯過了就沒了，重整一次前端記憶體就空的。
+  // ⚠ 這支與 /uploads 都允許**不帶 bank**（列最近的全部）。所以限縮不能只做在
+  // 「有帶 bank」那條路上——不帶就等於全看，那正是最容易漏的一格。一律 JOIN 場次。
   app.get('/api/exam/jobs', verifyToken, requireFeature('exam'), async (req, res) => {
     const bankId = parseInt(req.query.bank, 10);
-    const params = [], where = [];
-    if (Number.isInteger(bankId)) { params.push(bankId); where.push(`bank_id = $${params.length}`); }
+    const scope = bankScopeClause(req.actor, 'b.company_id');
+    const params = [...scope.params], where = [scope.sql];
+    if (Number.isInteger(bankId)) { params.push(bankId); where.push(`j.bank_id = $${params.length}`); }
     const { rows } = await query(`
-      SELECT id, bank_id, status, phase, pages_done, pages_total, started_at, updated_at
-        FROM exam_jobs ${where.length ? `WHERE ${where.join(' AND ')}` : ''}
-       ORDER BY id DESC LIMIT 50`, params);
+      SELECT j.id, j.bank_id, j.status, j.phase, j.pages_done, j.pages_total, j.started_at, j.updated_at
+        FROM exam_jobs j JOIN exam_banks b ON b.id = j.bank_id
+       WHERE ${where.join(' AND ')}
+       ORDER BY j.id DESC LIMIT 50`, params);
     res.json(rows);
   });
 
   // 佇列現況。這支給平台使用者看，所以用 JWT 而不是 X-Token。
   app.get('/api/exam/uploads', verifyToken, requireFeature('exam'), async (req, res) => {
     const bankId = parseInt(req.query.bank, 10);
-    const params = [], where = [];
-    if (Number.isInteger(bankId)) { params.push(bankId); where.push(`bank_id = $${params.length}`); }
+    const scope = bankScopeClause(req.actor, 'b.company_id');
+    const params = [...scope.params], where = [scope.sql];
+    if (Number.isInteger(bankId)) { params.push(bankId); where.push(`u.bank_id = $${params.length}`); }
     const { rows } = await query(`
-      SELECT id, bank_id, batch_key, batch_label, page, responder, status, error,
-             is_test, created_at, updated_at
-        FROM exam_uploads
-       ${where.length ? `WHERE ${where.join(' AND ')}` : ''}
-       ORDER BY id DESC LIMIT 200`, params);
+      SELECT u.id, u.bank_id, u.batch_key, u.batch_label, u.page, u.responder, u.status, u.error,
+             u.is_test, u.created_at, u.updated_at
+        FROM exam_uploads u JOIN exam_banks b ON b.id = u.bank_id
+       WHERE ${where.join(' AND ')}
+       ORDER BY u.id DESC LIMIT 200`, params);
     res.json(rows);
   });
 
@@ -434,6 +485,7 @@ function registerRoutes(app) {
   app.get('/api/exam/dashboard', verifyToken, requireFeature('exam'), async (req, res) => {
     const bankId = parseInt(req.query.bank, 10);
     if (!Number.isInteger(bankId)) return res.status(400).json({ error: '缺少 bank' });
+    if (!await ensureBankVisible(req, res, bankId)) return;
     const bank = (await query(
       `SELECT id, label, odoo_version, paused FROM exam_banks WHERE id=$1`, [bankId])).rows[0];
     if (!bank) return res.status(404).json({ error: '找不到題庫' });
@@ -543,6 +595,7 @@ function registerRoutes(app) {
       const up = (await query(
         `SELECT id, bank_id, page, status FROM exam_uploads WHERE id = $1`, [id])).rows[0];
       if (!up) return res.status(404).json({ error: '找不到這一頁' });
+      if (!await ensureBankVisible(req, res, up.bank_id)) return;
       if (up.status === 'running') {
         return res.status(409).json({ error: '這一頁正在跑，等它結束或先停掉再重試' });
       }
@@ -560,7 +613,8 @@ function registerRoutes(app) {
   //
   // 官方確認過的題不給改：它的答案是硬事實，標它「大概率錯」只會讓考試當下看到
   // 兩個互相矛盾的訊號。
-  app.patch('/api/exam/items/:id/history-wrong', verifyToken, requireFeature('exam'), express.json(), async (req, res) => {
+  // 改的是**共用題目池**上的標記（規格 §3.3 A 類），不是某一場的資料，所以限內部。
+  app.patch('/api/exam/items/:id/history-wrong', verifyToken, requireFeature('exam'), requireInternal, express.json(), async (req, res) => {
     try {
       const id = parseInt(req.params.id, 10);
       if (!Number.isInteger(id)) return res.status(400).json({ error: 'id 不合法' });
@@ -583,6 +637,7 @@ function registerRoutes(app) {
     try {
       const bankId = parseInt(req.params.id, 10);
       if (!Number.isInteger(bankId)) return res.status(400).json({ error: 'id 不合法' });
+      if (!await ensureBankVisible(req, res, bankId)) return;
       const bank = (await query(
         `SELECT id, label, odoo_version, status FROM exam_banks WHERE id = $1`, [bankId])).rows[0];
       if (!bank) return res.status(404).json({ error: '找不到題庫' });
@@ -602,6 +657,7 @@ function registerRoutes(app) {
       try {
         const bankId = parseInt(req.params.id, 10);
         if (!Number.isInteger(bankId)) return res.status(400).json({ error: 'id 不合法' });
+        if (!await ensureBankVisible(req, res, bankId)) return;
         if (!req.file) return res.status(400).json({ error: '缺少 screenshot' });
         const ext = sniffImage(req.file.buffer);
         if (!ext) return res.status(400).json({ error: '不是圖片檔（檔頭認不出已知的圖片格式）' });
@@ -665,10 +721,15 @@ function registerRoutes(app) {
     try {
       const id = parseInt(req.params.id, 10);
       if (!Number.isInteger(id)) return res.status(404).end();
+      // 圖片是最容易漏的一格：它不長得像「場次資料」，但成績單與考卷截圖都是。
+      // 兩種 kind 的場次來源不同——score 的 id 就是場次，upload 要反查。
       let rel = null;
       if (req.params.kind === 'score') {
+        if (!await canSeeBank(req.actor, id)) return res.status(404).end();
         rel = (await query(`SELECT score_image FROM exam_banks WHERE id = $1`, [id])).rows[0]?.score_image;
       } else if (req.params.kind === 'upload') {
+        const owner = (await query(`SELECT bank_id FROM exam_uploads WHERE id = $1`, [id])).rows[0];
+        if (!owner || !await canSeeBank(req.actor, owner.bank_id)) return res.status(404).end();
         rel = (await query(`SELECT image_path FROM exam_uploads WHERE id = $1`, [id])).rows[0]?.image_path;
       }
       if (!rel) return res.status(404).end();
@@ -691,6 +752,7 @@ function registerRoutes(app) {
     try {
       const bankId = parseInt(req.params.id, 10);
       if (!Number.isInteger(bankId)) return res.status(400).json({ error: 'id 不合法' });
+      if (!await ensureBankVisible(req, res, bankId)) return;
       const bank = (await query(`SELECT id FROM exam_banks WHERE id = $1`, [bankId])).rows[0];
       if (!bank) return res.status(404).json({ error: '找不到題庫' });
 
@@ -719,6 +781,7 @@ function registerRoutes(app) {
     try {
       const bankId = parseInt(req.params.id, 10);
       if (!Number.isInteger(bankId)) return res.status(400).json({ error: 'id 不合法' });
+      if (!await ensureBankVisible(req, res, bankId)) return;
       const bank = (await query(`SELECT id FROM exam_banks WHERE id = $1`, [bankId])).rows[0];
       if (!bank) return res.status(404).json({ error: '找不到題庫' });
 
@@ -755,10 +818,11 @@ function registerRoutes(app) {
       if (!Number.isInteger(attemptId)) return res.status(400).json({ error: 'id 不合法' });
       const answer = answerValue(req.body.answer, { required: true });
       const attempt = (await query(
-        `SELECT i.official_from, i.answer_official
+        `SELECT a.bank_id, i.official_from, i.answer_official
            FROM exam_attempts a JOIN exam_items i ON i.id=a.item_id WHERE a.id=$1`,
         [attemptId])).rows[0];
       if (!attempt) return res.status(404).json({ error: '找不到這題' });
+      if (!await ensureBankVisible(req, res, attempt.bank_id)) return;
       if (attempt.official_from && attempt.answer_official && attempt.answer_official.length) {
         return res.status(409).json({ error: '官方確認題已鎖定' });
       }
@@ -783,10 +847,11 @@ function registerRoutes(app) {
       if (!Number.isInteger(attemptId)) return res.status(400).json({ error: 'id 不合法' });
       const answer = answerValue(req.body.answer);
       const attempt = (await query(
-        `SELECT i.official_from, i.answer_official
+        `SELECT a.bank_id, i.official_from, i.answer_official
            FROM exam_attempts a JOIN exam_items i ON i.id=a.item_id WHERE a.id=$1`,
         [attemptId])).rows[0];
       if (!attempt) return res.status(404).json({ error: '找不到這題' });
+      if (!await ensureBankVisible(req, res, attempt.bank_id)) return;
       if (attempt.official_from && attempt.answer_official && attempt.answer_official.length) {
         return res.status(409).json({ error: '官方確認題已鎖定' });
       }

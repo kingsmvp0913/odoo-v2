@@ -74,11 +74,20 @@ describe('route 表：3b 收斂掉的路由旗標', () => {
   ];
   // 內部人員限定。用 requiresInternal 而非 requiresAdmin 是刻意的裁決：
   // 鎖成管理員限定會把考試從 7 個內部同事手上收走（見 app.js /exam-bank 的註解）。
-  const INTERNAL_ROUTES = ['/exam-bank', '/exam-run'];
+  //
+  // 2026-09-24 裁決把 /exam-run 移出這張表：客戶公司**可以用考試作戰台**，只是不管
+  // 題庫。它改成看公司功能開關（requiresFeature），場次範圍由後端強制。
+  // /exam-bank 留在這裡——題庫管理攤開的是跨公司共用的題目池。
+  const INTERNAL_ROUTES = ['/exam-bank'];
+  // 靠公司功能開關的路由。與 INTERNAL_ROUTES 分開列，是為了讓「哪一頁給客戶、
+  // 哪一頁不給」在這張表上一眼看得出來——混在一起的話，日後把 /exam-bank 誤改成
+  // 功能開關（＝客戶看得到內部題目池）不會有任何測試喊。
+  const FEATURE_ROUTES = [['/exam-run', 'exam']];
 
   test('route 表解析得到（寫法改變時不得靜默略過）', () => {
     expect(routeBlocks.length).toBeGreaterThanOrEqual(25);
-    const missing = [...ADMIN_ROUTES, ...INTERNAL_ROUTES].filter((p) => !blockOf(p));
+    const missing = [...ADMIN_ROUTES, ...INTERNAL_ROUTES, ...FEATURE_ROUTES.map((f) => f[0])]
+      .filter((p) => !blockOf(p));
     expect(missing).toEqual([]);
   });
 
@@ -88,6 +97,17 @@ describe('route 表：3b 收斂掉的路由旗標', () => {
 
   test.each(INTERNAL_ROUTES)('%s 掛著 requiresInternal', (p) => {
     expect(`${p}: ${/requiresInternal:\s*true/.test(blockOf(p).body)}`).toBe(`${p}: true`);
+  });
+
+  test.each(FEATURE_ROUTES)('%s 掛著 requiresFeature: %s', (p, key) => {
+    const body = blockOf(p).body;
+    expect(`${p}: ${new RegExp(`requiresFeature:\\s*["']${key}["']`).test(body)}`).toBe(`${p}: true`);
+  });
+
+  // 反向：功能開關那條路不得又被補上 requiresInternal——補了就等於客戶看得到選單
+  // 卻進不去（router 擋、後端放行），那正是 2026-09-24 之前的狀態。
+  test.each(FEATURE_ROUTES)('%s 不得同時掛 requiresInternal', (p) => {
+    expect(`${p}: ${/requiresInternal/.test(blockOf(p).body)}`).toBe(`${p}: false`);
   });
 
   // 反向釘住那個裁決：改回 requiresAdmin 不會有人抱怨（內部同事只會以為考試沒了），

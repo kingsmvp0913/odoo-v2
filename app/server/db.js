@@ -1245,6 +1245,10 @@ async function migrate() {
     // null＝內部，用平台訂閱。ON DELETE SET NULL：帳號刪除不該連帶刪掉考試紀錄，
     // 而不寫刪除行為會讓 REFERENCES 直接擋死刪除。
     { table: 'exam_uploads', col: 'user_id', sql: 'ALTER TABLE exam_uploads ADD COLUMN user_id INTEGER REFERENCES users(id) ON DELETE SET NULL' },
+    // 這一場考試給誰看（規格 2026-09-24-exam-tenant-scope-design.md §3.1）。null＝內部。
+    // 為什麼不從 exam_uploads 推：手動開的新場次一張截圖都沒有，推不出主人，
+    // 建立它的人當場就看不到自己剛開的那一場。既有資料一律留 null（目前只有內部在用）。
+    { table: 'exam_banks', col: 'company_id', sql: 'ALTER TABLE exam_banks ADD COLUMN company_id INTEGER REFERENCES companies(id) ON DELETE SET NULL' },
     { table: 'exam_uploads', col: 'batch_label', sql: 'ALTER TABLE exam_uploads ADD COLUMN batch_label TEXT' },
     // 一頁截圖＝一個章節（舊題庫 19 頁 19 章節，零例外）。章節是 certain 推導的骨架：
     // 官方成績只到章節層級，沒有章節就沒有「這章全對」可勾，整個歸檔流程失去依據。

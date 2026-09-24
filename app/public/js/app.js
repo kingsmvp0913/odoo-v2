@@ -210,10 +210,16 @@ const router = createRouter({
       meta: { requiresAuth: true, requiresInternal: true },
     },
     {
-      // 考試作戰台（考試當天用）。同樣只有 ui-next 版本、同樣用 requiresInternal，理由同上。
+      // 考試作戰台（考試當天用）。只有 ui-next 版本。
+      //
+      // 2026-09-24 裁決：客戶公司**可以用考試作戰台**（傳自己的考卷、判題、定案），
+      // 只是不管題庫。所以這裡從 requiresInternal 改成看功能開關——上面那段註解說的
+      // 「刻意保守的近似」在客戶能用之後就變成過嚴，客戶會看得到選單卻進不去。
+      // 場次的範圍由後端強制（lib/exam/scope.js），前端只是入口守衛。
+      // ⚠ 上面的 /exam-bank 維持 requiresInternal，不要一起改。
       path: "/exam-run",
       component: window.UiNextExamRunView,
-      meta: { requiresAuth: true, requiresInternal: true },
+      meta: { requiresAuth: true, requiresFeature: "exam" },
     },
     {
       // 產品化規格頁：只有 ui-next 版本（理由同上）。內容是內部規劃文件，
@@ -325,14 +331,24 @@ router.beforeEach(async (to) => {
       return { path: "/login", query: { redirect: to.fullPath } };
     }
   }
-  // requiresAdmin 與 requiresInternal 各自打一次 auth/me，沒有合併——合併是對的方向，
-  // 但那是既有 guard 的重構，超出本次任務範圍。
+  // requiresAdmin、requiresInternal 與 requiresFeature 各自打一次 auth/me，沒有合併——
+  // 合併是對的方向，但那是既有 guard 的重構，超出本次任務範圍。
   if (to.meta.requiresInternal) {
     try {
       const me = await Api.get("auth/me");
       // 平台管理員沒有公司，後端一律視為內部人員；這裡照樣只看 is_internal，
       // 不要再補 role === 'admin' 的特判——特判會讓兩邊的定義慢慢分岔。
       if (me.is_internal !== true) return "/forbidden";
+    } catch {
+      return { path: "/login", query: { redirect: to.fullPath } };
+    }
+  }
+  // 公司功能開關（目前只有考試）。auth/me 的 features 是**有效值**而不是 companies.features
+  // 原文——內部公司與平台管理員在後端一律全開（見 auth.js 的註解），所以這裡不必再特判。
+  if (to.meta.requiresFeature) {
+    try {
+      const me = await Api.get("auth/me");
+      if (me.features?.[to.meta.requiresFeature] !== true) return "/forbidden";
     } catch {
       return { path: "/login", query: { redirect: to.fullPath } };
     }

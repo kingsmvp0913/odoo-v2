@@ -10,6 +10,7 @@ const express = require('express');
 const { query } = require('./db');
 const { verifyToken } = require('./auth');
 const { requireFeature } = require('./lib/company-features');
+const { bankScopeClause, bankOwnerForActor, requireInternal } = require('./lib/exam/scope');
 
 // 題目在列表上不需要選項全文，只要題幹與信心度。選項與理由留給單題詳情。
 const LIST_COLS = `
@@ -24,13 +25,17 @@ function registerRoutes(app) {
   // 那種寫法在正式 Postgres 完全合法，但 **pg-mem 不支援子查詢引用外層欄位**，
   // 會回 `column "b.id" does not exist`。測試環境炸、正式環境好，是最難查的那種落差。
   app.get('/api/exam/banks', verifyToken, requireFeature('exam'), async (req, res) => {
+    // 客戶只看得到自己公司的場次（規格 §3.2）。內部與平台管理員的條件是 TRUE，
+    // 所以這裡不必分支——分支寫兩份 SQL，遲早只改到其中一份。
+    const scope = bankScopeClause(req.actor, 'b.company_id');
     const { rows } = await query(`
       SELECT b.id, b.label, b.odoo_version, b.status, b.taken_at, b.created_at, b.score_image,
              COUNT(a.id)::int AS item_count
         FROM exam_banks b
         LEFT JOIN exam_attempts a ON a.bank_id = b.id
+       WHERE ${scope.sql}
        GROUP BY b.id, b.label, b.odoo_version, b.status, b.taken_at, b.created_at, b.score_image
-       ORDER BY b.id DESC`);
+       ORDER BY b.id DESC`, scope.params);
     res.json(rows);
   });
 
@@ -50,21 +55,31 @@ function registerRoutes(app) {
 
       // 同版本內名稱不可重複：外部上傳可以用 label 指定題庫（resolveBank），
       // 重名時它取 id 最大的那個，於是圖會靜靜落到另一場考試上。
+      //
+      // ⚠ 重名檢查必須限縮在自己看得到的範圍內，否則 409 會變成外洩管道：
+      // 客戶開一場叫「2026-09-24」的考試而收到「已經有一場叫…」，就等於被告知
+      // 內部存在同名的那一場。而且他還無法用那個名字（別人的名字擋住他）。
+      const owner = bankOwnerForActor(req.actor);
+      const dupScope = bankScopeClause(req.actor, 'company_id', 3);
       const dup = (await query(
-        `SELECT id FROM exam_banks WHERE label = $1 AND odoo_version = $2`, [label, version])).rows[0];
+        `SELECT id FROM exam_banks WHERE label = $1 AND odoo_version = $2 AND ${dupScope.sql}`,
+        [label, version, ...dupScope.params])).rows[0];
       if (dup) return res.status(409).json({ error: `Odoo ${version} 已經有一場叫「${label}」的考試` });
 
       const takenAt = String(req.body.taken_at ?? '').trim() || null;
       const { rows } = await query(`
-        INSERT INTO exam_banks (label, odoo_version, status, taken_at)
-        VALUES ($1, $2, 'ready', $3)
-        RETURNING id, label, odoo_version, status, taken_at, created_at`, [label, version, takenAt]);
+        INSERT INTO exam_banks (label, odoo_version, status, taken_at, company_id)
+        VALUES ($1, $2, 'ready', $3, $4)
+        RETURNING id, label, odoo_version, status, taken_at, created_at`, [label, version, takenAt, owner]);
       res.status(201).json(rows[0]);
     } catch (e) { res.status(500).json({ error: e.message }); }
   });
 
   // 有哪些 Odoo 版本的題（版本切換用）。
-  app.get('/api/exam/versions', verifyToken, requireFeature('exam'), async (req, res) => {
+  // 以下到 /api/exam/lookup 為止都是**題庫管理**（瀏覽累積的題目、標歷史錯題、
+  // 版本切換）：題目池是跨公司共用的，攤開來看就等於把內部累積的答案給客戶看。
+  // 客戶用的是考試作戰台（exam-upload-routes.js 那些），不是這裡。
+  app.get('/api/exam/versions', verifyToken, requireFeature('exam'), requireInternal, async (req, res) => {
     const { rows } = await query(`
       SELECT odoo_version, COUNT(*)::int AS n
         FROM exam_items GROUP BY odoo_version ORDER BY odoo_version DESC`);
@@ -75,7 +90,7 @@ function registerRoutes(app) {
   //
   // 不用頁碼當骨架而用章節：官方成績本來就按章節給，直接攤在標題上；而且跨考次
   // 合併後同一章不會固定在同一頁，用頁碼遲早對不上。
-  app.get('/api/exam/sections', verifyToken, requireFeature('exam'), async (req, res) => {
+  app.get('/api/exam/sections', verifyToken, requireFeature('exam'), requireInternal, async (req, res) => {
     const bankId = parseInt(req.query.bank, 10);
     if (!Number.isInteger(bankId)) return res.status(400).json({ error: '缺少 bank' });
 
@@ -124,7 +139,7 @@ function registerRoutes(app) {
   });
 
   // 單題詳情：選項中英對照、歷來審查、證據、各次考試的作答。
-  app.get('/api/exam/items/:id', verifyToken, requireFeature('exam'), async (req, res) => {
+  app.get('/api/exam/items/:id', verifyToken, requireFeature('exam'), requireInternal, async (req, res) => {
     const id = parseInt(req.params.id, 10);
     if (!Number.isInteger(id)) return res.status(400).json({ error: 'id 不合法' });
 
@@ -171,7 +186,7 @@ function registerRoutes(app) {
   // 讓 /solve 看到一個不確定的舊答案，就是拿它去錨定新的推理——那正是這套系統
   // 花大力氣在防的事。這條規則寫在 server 才擋得住；回全部讓 client 自己判斷
   // 等於沒有規則。
-  app.get('/api/exam/lookup', verifyToken, requireFeature('exam'), async (req, res) => {
+  app.get('/api/exam/lookup', verifyToken, requireFeature('exam'), requireInternal, async (req, res) => {
     const q = String(req.query.q || '').trim();
     const version = String(req.query.version || '19').trim();
     if (!q) return res.status(400).json({ error: '缺少 q' });
