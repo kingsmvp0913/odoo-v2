@@ -10,6 +10,7 @@ const docs = [
   { id: 'sandbox', num: '0', label: '把 AI 關起來', deps: '無前置', file: '2026-09-11-agent-sandbox-design.md' },
   { id: 'tenant', num: '1', label: '租戶隔離', deps: '前置 0', file: '2026-09-11-tenant-isolation-design.md' },
   { id: 'byok', num: '2', label: '客戶自帶 API key', deps: '前置 0、1', file: '2026-09-11-byok-api-key-design.md' },
+  { id: 'exambyok', num: '2b', label: '考試改用客戶的 key', deps: '前置 2', file: '2026-09-24-exam-byok-design.md' },
   { id: 'flow', num: '3', label: '客戶按到底', deps: '前置 0、1、2', file: '2026-09-11-customer-self-serve-flow-design.md' },
   { id: 'ops', num: '4', label: '上線營運', deps: '大部分在 3 之後', file: '2026-09-11-saas-operations-design.md' },
 ];
