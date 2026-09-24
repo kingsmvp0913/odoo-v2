@@ -15,9 +15,15 @@ echo "=== odoo-v2 更新 ==="
 
 # 1. 拉最新（--ff-only：不產生 merge commit；有本機未提交變更會在此明確報錯而非硬併）。
 #    此時 server 可照跑不受影響。
+#
+#    走 scripts/git-pull.js 而不是直接 `git pull`：**私有 repo 的 git pull 會停下來問帳密**，
+#    而那時候輸入帳密也過不了——GitHub 2021-08 已停用密碼登入 git，輸入任何人的密碼都不會過。
+#    公開時期不會遇到，所以這個坑會在「repo 轉成私有」的那一天才出現。
+#    那支用平台已經存好的 PAT（users.github_pat_enc），只注入該次 git 子行程；它只認
+#    `origin`，與 repo 是哪一個、公開還是私有都無關。
 BEFORE="$(git rev-parse HEAD)"
 echo "git pull..."
-git pull --ff-only
+node scripts/git-pull.js
 AFTER="$(git rev-parse HEAD)"
 
 if [ "$BEFORE" = "$AFTER" ]; then
