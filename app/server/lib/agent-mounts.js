@@ -125,6 +125,14 @@ async function resolveSandboxMounts(ctx, deps = {}) {
   if (kind === 'none') { attach(); return { mounts, workdir }; }
 
   const info = await d.getProjectInfo(ctx.projectId);
+  if (!info && profile.sourceOptional) {
+    // 降級成「沒有專案原始碼」，而不是整個失敗（見 agent-profiles.js 的 sourceOptional）。
+    // 刻意導向與 kind === 'none' **完全相同**的回傳形狀：那個形狀本來就存在、也已經
+    // 有測試，不必為降級再發明第二條路。專案層的 skill（getSQL／wikiQuery）留著是刻意的
+    // ——那正是這時候唯一還問得到東西的管道。
+    attach();
+    return { mounts, workdir };
+  }
   if (!info) {
     // 訊息給人看，所以指名道姓。getProjectInfo 回 null 時連名字都拿不到（它只撈 clone 完成的
     // repo），得另外查一次 projects；這是錯誤路徑，多一次 SELECT 不影響正常流程。

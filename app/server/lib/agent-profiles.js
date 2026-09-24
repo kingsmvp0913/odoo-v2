@@ -20,8 +20,13 @@ const AGENT_PROFILES = Object.freeze({
   qa:                  Object.freeze({ scope: 'project', mount: 'task-worktree', attachments: 'task' }),
   respec:              Object.freeze({ scope: 'project', mount: 'task-worktree-or-none', attachments: 'task' }),
   reject_triage:       Object.freeze({ scope: 'project', mount: 'task-worktree-or-clone', attachments: 'task' }),
-  cs:                  Object.freeze({ scope: 'project', mount: 'project-clone', attachments: 'task', logs: true }),
-  chat:                Object.freeze({ scope: 'project', mount: 'project-clone', attachments: 'chat', outbox: true, logs: true }),
+  // sourceOptional：專案原始碼「有更好」而不是「非有不可」。這兩支是問答型的，
+  // 還有 wiki／資料庫／log 可以問（source-routing）；沒有 clone 完成的 repo 就整個
+  // 失敗，等於專案還在 clone 或 clone 失敗時，連「這個專案怎麼了」都問不了。
+  // 實測 2026-09-18~22 六天內因此失敗 11 次（chat 8／cs 3，跨 3 個專案）。
+  // ⚠ 不要加到 wiki／merge 上：那些沒有原始碼做出來的結果是**錯的**，硬擋才對。
+  cs:                  Object.freeze({ scope: 'project', mount: 'project-clone', attachments: 'task', logs: true, sourceOptional: true }),
+  chat:                Object.freeze({ scope: 'project', mount: 'project-clone', attachments: 'chat', outbox: true, logs: true, sourceOptional: true }),
   merge:               Object.freeze({ scope: 'project', mount: 'project-clone' }),
   'merge-explain':     Object.freeze({ scope: 'project', mount: 'project-clone' }),
   'merge-clarify':     Object.freeze({ scope: 'project', mount: 'project-clone' }),

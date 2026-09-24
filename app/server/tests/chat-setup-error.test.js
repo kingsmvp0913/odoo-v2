@@ -40,13 +40,21 @@ beforeEach(() => {
 });
 
 // 標記是這條鏈唯一的訊號：拿掉它，收尾訊息就默默退回「請重新發送」，而且沒有任何徵狀。
-test('repo 未 clone 完成 → 掛載層丟出的錯標成設定錯誤，並帶使用者做得到的下一步', async () => {
+//
+// ⚠ 2026-09-24 起這裡用 wiki 而不是 chat 當例子：chat／cs 標了 sourceOptional，
+// 沒有 clone 完成的 repo 時會**降級照跑**而不是丟錯（六天內因此失敗 11 次，見
+// agent-profiles.js 的註解）。但「設定錯誤要帶得出真因與下一步」這條鏈本身沒有變，
+// 對其他硬擋的 agent 仍然成立——所以換一支還會丟錯的來釘，機制不動。
+test('掛載層丟出的設定錯誤有標記，並帶使用者做得到的下一步', async () => {
   const appDir = fs.mkdtempSync(path.join(os.tmpdir(), 'aidev-mounts-'));
   const ctx = {
-    profile: profileFor('chat'), projectId: 7, taskDbId: null, cwd: undefined, chatId: 5,
+    profile: profileFor('wiki'), projectId: 7, taskDbId: null, cwd: undefined, chatId: 5,
     feedbackIds: [], home: path.join(appDir, 'home'), platformWorktree: null, appDir,
   };
-  const err = await resolveSandboxMounts(ctx, { getProjectInfo: async () => null }).catch(e => e);
+  const err = await resolveSandboxMounts(ctx, {
+    getProjectInfo: async () => null,
+    query: async () => ({ rows: [{ name: '鴻久' }] }),   // 錯誤訊息要指名道姓，得另外查一次
+  }).catch(e => e);
   fs.rmSync(appDir, { recursive: true, force: true });
 
   expect(err.message).toMatch(/沒有 clone 完成的 repo/);

@@ -43,6 +43,9 @@ beforeAll(() => {
     query: async (sql, params) => {
       if (/FROM tasks WHERE id/.test(sql)) return { rows: params[0] === 70 ? [{ task_id: 'task_7', project_id: 7 }] : [] };
       if (/FROM tasks WHERE project_id/.test(sql)) return { rows: params[0] === 7 ? [{ id: 70 }, { id: 71 }] : [] };
+      // 錯誤路徑才會用到：沒有 clone 完成的 repo 時，訊息要指名道姓，
+      // 而 getProjectInfo 回 null 時連名字都拿不到，得另外查一次（見 agent-mounts.js）
+      if (/SELECT name FROM projects WHERE id/.test(sql)) return { rows: [{ name: `P${params[0]}` }] };
       throw new Error(`unexpected sql ${sql}`);
     },
     getProjectInfo: async (id) => id === 7 ? {
@@ -271,5 +274,44 @@ describe('白名單 skill 掛進家目錄（計畫 X9）', () => {
     const ctx = base({ profile: profileFor('deploy_fix'), projectId: null, taskDbId: null, home: path.join(appDir, 'data', 'agent-home', 'none') });
     const m = await resolveSandboxMounts(ctx, deps);
     expect(skillTargets(m, ctx.home)).toEqual([]);
+  });
+});
+
+// 2026-09-18~22 實測：容器模式下，專案沒有 clone 完成的 repo 就整個失敗，六天內害
+// chat 失敗 8 次、cs 3 次（跨 3 個專案）。舊的非容器路徑不需要掛載，所以沒 repo 照樣
+// 能問——這是切進容器之後才出現的回歸，而且打到的是人天天在用的對話與客服分流。
+//
+// 修法是**降級不是放寬**：問答型 agent 沒有原始碼仍然有 wiki／資料庫／log 可以問；
+// 真的需要原始碼的（wiki 重建、合併）沒有原始碼做出來的結果是錯的，必須繼續硬擋。
+describe('專案沒有 clone 完成的 repo', () => {
+  // projectId 8 在 deps.getProjectInfo 裡回 null（＝沒有 clone 完成的 repo）
+  const noRepo = over => base({ projectId: 8, taskDbId: null, ...over });
+
+  test.each([['chat'], ['cs']])('%s：降級照跑，不丟例外', async (agentType) => {
+    const m = await resolveSandboxMounts(noRepo({ profile: profileFor(agentType), chatId: 5 }), deps);
+    // 工作目錄退回家目錄——與「專案範圍但沒指定專案」（kind === 'none'）完全相同的形狀
+    expect(m.workdir).toBe(path.join(appDir, 'data', 'agent-home', 'project-7'));
+    // 沒有任何一個掛載指向 repos/：沒有原始碼可掛，就不該憑空掛出一個
+    expect(sources(m).filter((s) => s.startsWith(path.join(R, 'repos')))).toEqual([]);
+    expectNoPlatformSecrets(m);
+  });
+
+  test('chat 降級後仍掛得到對話附件與出貨箱（不是變成空殼）', async () => {
+    const m = await resolveSandboxMounts(noRepo({ profile: profileFor('chat'), chatId: 5 }), deps);
+    expect(sources(m)).toContain(path.join(R, 'uploads', 'chat_5'));
+  });
+
+  // ⚠ 反向：沒有原始碼的 wiki 重建會產出錯的 wiki，必須繼續失敗，而且訊息要指名道姓
+  test.each([['wiki'], ['merge']])('%s：仍然硬擋，訊息講得出是哪個專案', async (agentType) => {
+    await expect(resolveSandboxMounts(noRepo({ profile: profileFor(agentType) }), deps))
+      .rejects.toThrow(/沒有 clone 完成的 repo/);
+  });
+
+  // 守住「降級只給刻意標記的那幾支」：sourceOptional 不小心加到別的 profile 上，
+  // 症狀是那支 agent 安靜地拿不到原始碼、產出看起來正常但內容是空的
+  test('只有 chat 與 cs 標了 sourceOptional', () => {
+    const { AGENT_PROFILES } = require('../lib/agent-profiles');
+    const flagged = Object.entries(AGENT_PROFILES).filter(([, p]) => p.sourceOptional).map(([k]) => k).sort();
+    expect(flagged).toEqual(['chat', 'cs']);
   });
 });
