@@ -72,6 +72,13 @@
     },
     computed: {
       tabs() { return COMPANY_TABS; },
+      expiringCompanies() {
+        const now = Date.now();
+        return this.companies.filter((c) => {
+          const remaining = new Date(c.active_until).getTime() - now;
+          return c.is_active && !c.is_internal && c.active_until && remaining > 0 && remaining <= 14 * 86400000;
+        });
+      },
       // 還沒綁給這家公司的專案，供「新增綁定」下拉選單用。
       unboundProjects() {
         const boundIds = new Set(this.boundProjects.map((p) => p.project_id));
@@ -335,6 +342,10 @@
     },
     template: `
       <section class="ui-next-page ui-next-company-admin-page">
+        <div v-if="expiringCompanies.length" class="ui-next-subscription-warning" role="status">
+          <strong>公司使用期間即將到期</strong>
+          <p v-for="c in expiringCompanies" :key="c.id">{{ c.name }}：{{ dateOnly(c.active_until) }} 到期，請確認是否續期。</p>
+        </div>
         <template v-if="!selected">
           <header class="ui-next-page-head">
             <div>

@@ -24,8 +24,16 @@
         addUserOpen: false,
         taskBudgetInput: "",
         internalCompany: false,
+        activeUntil: null,
         savingBudget: false,
       };
+    },
+    computed: {
+      expiryWarning() {
+        if (this.internalCompany || !this.activeUntil) return false;
+        const remaining = new Date(this.activeUntil).getTime() - Date.now();
+        return remaining > 0 && remaining <= 14 * 86400000;
+      },
     },
     async created() { await this.loadUsers(); },
     methods: {
@@ -34,10 +42,13 @@
         this.loadError = "";
         try {
           // 不帶任何公司參數：後端一律從 req.actor 取自己的公司，帶了也不算數（規格重點）。
-          const [users, budget] = await Promise.all([Api.get("company/users"), Api.get("company/task-budget")]);
+          const [users, budget, subscription] = await Promise.all([
+            Api.get("company/users"), Api.get("company/task-budget"), Api.get("company/subscription"),
+          ]);
           this.users = users;
           this.taskBudgetInput = budget.task_budget_usd == null ? "" : String(budget.task_budget_usd);
           this.internalCompany = !!budget.is_internal;
+          this.activeUntil = subscription.active_until;
         } catch (e) {
           this.loadError = e.message || "無法載入帳號列表";
         } finally {
@@ -116,6 +127,11 @@
           </div>
           <button class="btn btn-primary btn-sm" @click="addUserOpen = true">＋ 新增帳號</button>
         </header>
+
+        <div v-if="expiryWarning" class="ui-next-subscription-warning" role="status">
+          <strong>公司使用期間即將到期</strong>
+          <p>{{ String(activeUntil).slice(0, 10) }} 到期，請聯絡平台管理員續期。</p>
+        </div>
 
         <p v-if="loadError" class="ui-next-error-text">{{ loadError }}</p>
 

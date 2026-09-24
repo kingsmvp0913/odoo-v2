@@ -31,6 +31,15 @@ function myCompany(req, res) {
 }
 
 function registerRoutes(app) {
+  app.get('/api/company/subscription', verifyToken, async (req, res) => {
+    const companyId = myCompany(req, res); if (!companyId) return;
+    try {
+      const { rows } = await query('SELECT active_until, is_internal FROM companies WHERE id=$1', [companyId]);
+      if (!rows.length) return res.status(404).json({ error: '找不到所屬公司' });
+      res.json({ active_until: rows[0].active_until, is_internal: rows[0].is_internal });
+    } catch (err) { res.status(500).json({ error: err.message }); }
+  });
+
   app.get('/api/company/task-budget', verifyToken, async (req, res) => {
     const companyId = myCompany(req, res); if (!companyId) return;
     try {

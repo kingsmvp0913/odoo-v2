@@ -86,6 +86,18 @@ describe('任務花費上限', () => {
   });
 });
 
+test('公司管理員只能讀取自己公司的到期日，供管理頁持續顯示提醒', async () => {
+  const untilA = new Date(Date.now() + 13 * 86400000).toISOString();
+  const untilB = new Date(Date.now() + 2 * 86400000).toISOString();
+  await dbModule.query('UPDATE companies SET active_until=$2 WHERE id=$1', [coA, untilA]);
+  await dbModule.query('UPDATE companies SET active_until=$2 WHERE id=$1', [coB, untilB]);
+  const own = await request(app).get(`/api/company/subscription?company_id=${coB}`).set(as(caToken));
+  expect(own.status).toBe(200);
+  expect(new Date(own.body.active_until).toISOString()).toBe(untilA);
+  expect(own.body).not.toHaveProperty('company_id');
+  expect((await request(app).get('/api/company/subscription').set(as(plainToken))).status).toBe(403);
+});
+
 describe('範圍', () => {
   test('只列得到自己公司的人', async () => {
     const res = await request(app).get('/api/company/users').set(as(caToken));

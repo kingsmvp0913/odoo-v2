@@ -4,6 +4,16 @@
   border-color: var(--text);
   color: var(--text);
 }
+.ui-next-subscription-warning {
+  margin: 0 0 16px;
+  padding: 12px 14px;
+  border: 1px solid color-mix(in srgb, var(--warning) 45%, var(--border));
+  border-left: 3px solid var(--warning);
+  border-radius: var(--radius-sm);
+  background: color-mix(in srgb, var(--warning) 10%, var(--surface));
+  color: var(--text);
+}
+.ui-next-subscription-warning p { margin: 4px 0 0; }
 .ui-next-task-filters {
   display: flex;
   flex-wrap: wrap;
