@@ -17,6 +17,7 @@ const { listRemoteBranchesByUrl } = require('./pipeline/git');
 const { abortCompanyTasks } = require('./pipeline/runner');
 const { validTaskBudgetUsd } = require('./lib/task-budget');
 const { setCompanyAnthropicKey, clearCompanyAnthropicKey } = require('./lib/company-anthropic-key');
+const { companyReadiness } = require('./lib/company-readiness');
 
 const auth = [verifyToken, requirePlatformAdmin];
 
@@ -227,6 +228,17 @@ function registerRoutes(app) {
   // 在收到 ANTHROPIC_API_KEY 時會把平台那把刪掉，所以驗到的一定是這一把。
   // 兩支都只是薄殼：規則本體在 lib/company-anthropic-key.js，因為公司管理員那邊
   // （company-routes.js）也有同一組入口，規則必須是同一份（2026-09-24 裁決「兩邊都要能填」）。
+  // 開通進度：唯讀，全部從現有的表算，不加欄位也不改任何流程（子專案 4 §4.1）。
+  // 放在公司管理頁的詳細區而不是另開一頁——2026-09-22 使用者推翻過獨立的「平台更版」頁，
+  // 理由同一個：不要為了一張檢查表多一個管理功能出來。
+  app.get('/api/admin/companies/:id/readiness', auth, async (req, res) => {
+    try {
+      const r = await companyReadiness(req.params.id);
+      if (!r) return res.status(404).json({ error: '找不到這家公司' });
+      res.json(r);
+    } catch (err) { res.status(500).json({ error: err.message }); }
+  });
+
   app.put('/api/admin/companies/:id/anthropic-key', auth, async (req, res) => {
     try {
       const { warning } = await setCompanyAnthropicKey({

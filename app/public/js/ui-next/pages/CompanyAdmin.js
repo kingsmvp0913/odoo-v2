@@ -46,6 +46,10 @@
         newCompany: { name: "", is_active: true },
         savingCreate: false,
 
+        // 開通進度檢查表（子專案 4 §4.1）。唯讀，全部由後端從現有的表算出來。
+        readiness: null,
+        readinessError: "",
+
         // 客戶 Anthropic API key（平台管理員代填；客戶自己換走 CompanyUsers.js）
         keyForm: { api_key: "" },
         savingKey: false,
@@ -82,6 +86,12 @@
     },
     computed: {
       tabs() { return COMPANY_TABS; },
+      // 只列沒完成的：八項全列的話，做完的那幾行會永遠佔著版面，而這張表要回答的
+      // 是「還差什麼」。
+      pendingSteps() {
+        return this.readiness && this.readiness.applicable
+          ? this.readiness.steps.filter((s) => !s.done) : [];
+      },
       expiringCompanies() {
         const now = Date.now();
         return this.companies.filter((c) => {
@@ -162,7 +172,13 @@
         this.keyError = "";
         this.bindProjectId = "";
         this.bindCanRelease = false;
+        this.readiness = null;
+        this.readinessError = "";
         await this.loadProjectsPanel();
+        // ⚠ 刻意**不**和 loadProjectsPanel 併成 Promise.all：併進去的話這一支失敗
+        // 會讓整個詳細畫面只剩一行錯誤。實測過同一個坑（CompanyUsers.js 的 API key
+        // 狀態曾經害整頁只剩紅字 Not found）。這一塊壞掉只該讓這一塊壞掉。
+        await this.loadReadiness();
       },
       closeCompany() { this.selected = null; },
 
@@ -331,6 +347,17 @@
         }
       },
 
+      async loadReadiness() {
+        try {
+          this.readiness = await Api.get(`admin/companies/${this.selected.id}/readiness`);
+          this.readinessError = "";
+        } catch (e) {
+          // 算不出進度時不可以顯示成「零項完成」——那會讓人以為什麼都沒設定。
+          this.readiness = null;
+          this.readinessError = e.message || "無法載入開通進度";
+        }
+      },
+
       async saveKey() {
         if (!this.keyForm.api_key) return showToast("請貼上 API key", "error");
         this.savingKey = true;
@@ -495,6 +522,19 @@
               <p v-if="selected.is_internal">內部公司的「內部」標記由後端一次性遷移設定，任何畫面都無法變更，此處僅供辨識。</p>
             </div>
           </header>
+
+          <!-- 開通進度：切到任何分頁都看得到，而且它會告訴你「下一步該去哪個分頁」。
+               內部公司不顯示——內部不需要開通，顯示「3/8」只會誤導（後端也會回 applicable:false）。 -->
+          <div v-if="readinessError" class="error-msg">{{ readinessError }}</div>
+          <section v-else-if="readiness && readiness.applicable" class="ui-next-panel">
+            <h2>開通進度
+              <span class="pill" :class="readiness.done === readiness.total ? 'pill-success' : 'pill-warn'">{{ readiness.done }} / {{ readiness.total }}</span>
+            </h2>
+            <p v-if="!pendingSteps.length" class="ui-next-field-note">八個步驟都完成了，可以交給客戶。</p>
+            <p v-for="s in pendingSteps" :key="s.key" class="ui-next-field-note">
+              <strong>{{ s.label }}</strong>——{{ s.hint }}
+            </p>
+          </section>
 
           <!-- 四個分頁一比一對應原本直排的四個區塊。切分頁不動任何資料：四份表單都還在
                同一個 component 的 data 裡，v-show 只是藏起來，切回去時填到一半的內容還在。 -->
