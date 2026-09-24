@@ -64,4 +64,21 @@ commit 前的樹，HEAD 卻已經往前走了。此時誰在這個 checkout 上 
 全跑 4768 綠。**已 commit＋push `95860b1e`，未重啟**（沒重啟前今晚批次跑的仍是舊的 applyFix）。
 同日 #25（送出跳頂）改人工修掉 `857bb485` 並把 feedback 25 標 done，避免夜間批次第三次重修。
 
+**2026-09-24 第三次踩到，形狀換了：夾帶的是「刪除」。** 這次不是別人未完成的新碼，而是對方
+刻意 stage 好的 10 筆 `docs/handoff/.../graphify/` 刪除（他 3 分鐘前才在自己的 commit 加進來，
+然後決定拿掉）。我的 commit 訊息與 stat 顯示 `15 files changed, -1577`——**多出來的是負數**，
+比夾帶新檔難察覺：看起來像「我刪了很多」而不是「我收了別人的東西」。
+
+兩個讓我看漏的原因，下次要當成訊號：
+1. 我以為**具名路徑 `git add` 就夠**。不夠。`git add` 只決定「我加什麼」，`git commit` 收的
+   是**整個 index**，包含別人已經放進去的一切。這條記憶開頭講的就是這件事，我還是照踩。
+2. 那些檔在 `docs/` 底下，而 `docs/` 在 `.gitignore` 裡，於是我的直覺把它歸成「不在版控、
+   不用看」。但 `docs/handoff/` 與規格頁是**已追蹤**的（見 [[docs-handoff-tracked]]），
+   `.gitignore` 對已追蹤檔案無效。
+
+**補救（這次沒 push 前沒發現，已 push 後的做法）**：不要 revert 整個 commit（會把自己的改動
+一起退掉）。用 `git checkout <對方那個 commit> -- <被刪的路徑>` 還原成**對方原本的內容**，
+單獨 commit，並用 `git diff <對方commit> HEAD -- <路徑>` 驗到 0 行差異。
+然後**通知對方並明講「如果那是刻意的請重做」**——還原是擋回誤刪，不是替對方決定不刪。
+
 相關：[[git-status-uno-untracked-pitfall]]、[[nightly-fix-fuse-cache-read]]、[[multi-instance-shared-ai-dev]]

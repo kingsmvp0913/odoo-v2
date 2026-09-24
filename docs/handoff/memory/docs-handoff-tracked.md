@@ -31,8 +31,14 @@ metadata:
 2026-09-24 起改成自動化（`scripts/lib/handoff.js`）：
 - 舊機器換機前跑 `node scripts/lib/handoff.js --snapshot` 刷新快照（排除 `PROJECT_MEMORY_PREFIXES`
   列的客戶專案記憶，目前 hungjou／raifong／kangyue／ucpt，共 12 則；保留 114 則）。
-- 新機器 `./install.sh` → `scripts/setup.js` 會自動還原記憶＋`~/.claude` 的 CLAUDE.md／RTK.md／
-  graphify skill／settings.json（**只補不覆蓋**；本機無 `rtk` 時自動不寫那條 hook）。
+- 新機器 `./install.sh` → `scripts/setup.js` 會先裝 `rtk`（`scripts/lib/rtk.js`，官方 release 預編譯檔
+  進 `~/.local/bin`；用 `rtk gain` 驗身分，避開同名的 Rust Type Kit），再還原記憶＋`~/.claude` 的
+  CLAUDE.md／RTK.md／settings.json＋`~/.config/rtk`（**只補不覆蓋**；rtk 裝不起來就不寫那條 hook）。
+- **接手包不帶 graphify skill**（使用者 09-24 裁決）：自動索引 08-08 已移除、`install.sh` 不裝 CLI。
+- godui MCP 原本只在個人 `~/.claude.json`，09-24 移進版控的 `.mcp.json`（`382d477f`），否則換機後
+  nightShift skill §9 校準拿不到任何元件。
+- 盤查出、使用者裁決**先不動**的三項殘留：`Dockerfile:93` 仍裝 `graphifyy`、`.mcp.json` 的 shadcn
+  無任何引用、`project_repos.graphify_status/_error` 兩個欄位沒人讀。headroom／uv 裝了沒接，不列入安裝。
 - 還沒在真的第二台機器上實跑過 `install.sh`，只驗到單元測試（9 支）＋假 HOME 實跑還原。
 記憶快照仍不會自己更新，要手動跑 `--snapshot`。
 
