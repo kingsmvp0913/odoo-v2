@@ -5,13 +5,8 @@
 - [守門碼在 DENY 造成的死結](auto-fix-deny-deadlock.md) — 自動通道永遠修不掉自己的守門 bug，看到「動到不該動的檔案」退場就人工修；基線缺值不可當 0；NUL byte 讓 diff 不可審
 - [自動改善通道靜默停擺](improve-channel-stalled-silently.md) — 09-04 停擺三段真因（已修）＋破快取清單過期；健檢頁＝純 log、改善提案頁＝所有處置
 - [多 repo 首航撞出 5 個缺陷](multi-repo-first-run-fixes.md) — task 186 卡死；碼已 push **未重啟未實測**；odoo15 同形狀未爆彈
-- [鴻久 230 複審](hungjou-230-review-2026-09-04.md) — 第二輪全過；兩次「以為是缺陷」被實測解除
-- [鴻久 Odoo↔SM 資料慣例](hungjou-sm-data-conventions.md) — `res_partner.name` 存代號 `V0xxxx` 非 bug；主供應商主檔 0 筆；PURTA/PURTB 對照
-- [鴻久 211/212/213 複審](hungjou-211-213-review-2026-08-28.md) — 213 漏 `active_test=False`；審核前必看 cs 對話
-- [鴻久 183-187 複審](hungjou-183-187-review-2026-08-25.md) — 187 沒修到病根；189 被實測打臉退回
 - [測試環境可進 docker 跑 odoo shell](odoo-test-env-shell-testing.md) — 連線參數、造資料四道門、rollback 零殘留
 - [08-24 收工清單](session-2026-08-24-pending.md) — 剩 task 182 推部署、respec／spec-review 首輪未驗證
-- [萊峰19 filestore 遺失](raifong19-filestore-loss.md) — 補回 344、缺 98 救不回；補檔手法與兩個判讀陷阱
 - [asset 301 迴圈＝一直斷線](asset-301-loop-from-missing-filestore.md) — filestore 缺檔→空殼 attachment 重導自己；刪 bundle 重生
 - [錯誤訊息含冒號炸規格](yaml-colon-breaks-spec-parse.md) — `-: ` 被 YAML 當鍵值；只有 analysis 實跑驗過
 - [QA 拿舊規格審新實作](qa-resume-stale-spec.md) — resume 不比對 analysis_yaml；已修生效
@@ -23,7 +18,6 @@
 - [08-05 平台五功能](session-2026-08-05-platform-tasks.md) — SSO bad sig／port 池／chat 中斷等
 - [已失效的紅燈豁免清單](deployment-env-red-tests.md) — 別再拿來放過紅燈
 - [SSO JIT 撞 hr_attendance](sso-jit-create-hr-attendance-crash.md) — Odoo 19 空集合 bug；帶佔位 image 已修
-- [kangyue filestore uid](kangyue-filestore-uid-mismatch.md) — asset 500 真因＝目錄權限非 xpath
 - [環境回收政策](env-reclaim-policy.md) — 壽命拿 created_at 誤判；改池滿才徵收
 - [三份施工規格結案](spec-trio-executed-2026-08-08.md) — REFERENCES tasks(id) 不帶 CASCADE 會擋死刪除
 - [codex provider 未實作](codex-provider-spec-blocked.md) — codex 已裝，只差 OpenAI 憑證
@@ -36,7 +30,7 @@
 - [odoo_settings 密碼已加密](plaintext-credentials-in-odoo-settings.md) — 密文是 base64
 - [密碼不回流瀏覽器](password-no-longer-returned-to-browser.md) — *_set 旗標；Settings 共用儲存鈕風險
 - [中文專案名容器撞名](container-name-collapse-chinese.md) — 已修，folder_name 全 ASCII
-- [正式機拓樸](deployment-topology.md) — 平台 8771、測試區 10.0.0.1、埠池 21000-21099
+- [正式機拓樸](deployment-topology.md) — 平台 8771、測試區 10.0.0.1、埠池 21000-21099；**`config.json` 少了 `BIND_HOST=10.0.0.1` 會整站 502，而該檔不在版控**
 - [健檢修正通道實跑驗證](health-fix-channel-verified.md) — 08-21 全鏈跑通；agent 自報不可信
 - [子網域外部存取](external-access-decision.md) — 已上線；憑證到 2026-10-28，含重建指令
 - [VPN 掛載要同構路徑](vpn-sibling-mount-homomorphic.md) — /tmp 掛成空目錄
@@ -58,16 +52,13 @@
 - [部署關耗時看不見](deploy-stage-timing-invisible.md) — 多半是 review_pending 等人
 - [Figma 能力已移除](figma-endpoint-unproven-in-pipeline.md) — View seat 每月 6 次，別再提議加回
 - [測試環境沒有科目表](test-env-has-no-chart-of-accounts.md) — 會計類 E2E 全滅、人工也開不出發票
-- [raifong 17→19 升級](raifong-17-to-19-upgrade.md) — 已結案；舊裁決被實測推翻三次、「碼裡有 string ≠ 畫面中文」
 - [審 diff 別用 main...branch](task-diff-three-dot-stale-main.md) — 本地 main 落後會算進別張任務
 - [08-18 平台缺陷清單](pipeline-defects-found-2026-08-18.md) — 已修；subagent 判已修時證據在打臉
 - [SSO addon 跨版本三坑](sso-addon-cross-version-compat.md) — 白屏先看 session_info
-- [超淨 odoo15 移植做一半](ucpt-odoo15-port-incomplete.md) — `show`→`visible` 沒改
 - [Claude 用量小工具卡住](claude-usage-widget-stale.md) — 階段二未做、未重啟
 - [全域 mock fs 弄壞 jest](jest-global-fs-mock-breaks-transform-cache.md) — 只攔自己的路徑
 - [健檢分級與大健檢](health-severity-cadence-pending.md) — 未重啟未實測
 - [deploy 只升一個模組（已修）](deploy-single-module-limit.md) — node --check 抓不到未定義變數
-- [萊峰19 訂單類型系列](raifong19-order-type-series.md) — 198 歧義要先問、199 待審、200 與 198 不可並跑
 - [UI Next 夜班交接](nightshift-ui-next-handoff.md) — 無人值守三裁決 09-02 被當面推翻過
 - [09-01 未收尾六件事](open-loops-2026-09-01.md) — 未驗證 3＋等拍板 2＋DEMO 220-229 待刪
 - [09-01 UI Next 交班](session-2026-09-01-handoff.md) — 欠重啟；cron／frozen-copies 既有紅燈
@@ -91,10 +82,7 @@
 - [改善通道保險絲把快取當花費](nightly-fix-fuse-cache-read.md) — cache_read 撐爆預算（已修）＋主 clone 髒擋合併（已放寬）
 - [對話附件開放 Office／PDF／CSV](chat-attachment-formats.md) — 前後端兩份清單；未重啟未實測
 - [AI 回覆失敗：回覆與 YAML 綁死](reply-failed-atomic-parse.md) — 三層自癒未重啟；只送壞掉那段 YAML
-- [鴻久 272 複審](hungjou-272-review-2026-09-17.md) — 同步修正對；回填工具會寫 5,347 張、非匯入單被 write 權限擋、新測試沒登記
-- [鴻久 254/257/259 複審](hungjou-254-259-review-2026-09-10.md) — 全過；review_pending 的碼早在 testing
 - [自動部署頁改版](auto-deploy-ui-and-autofill.md) — 未重啟、SSH 未實跑
-- [鴻久部署拓樸](hungjou-deploy-topology.md) — odoo_dev 掛在 odoo-prd 容器；認容器靠 log_container
 - [自動部署資安複查](auto-deploy-security-fixes.md) — 四洞已修未 push；`ssh-sql.js` 密碼外洩未修
 - [共用 checkout commit 夾帶別人的檔](shared-index-race-on-commit.md) — 用私有 GIT_INDEX_FILE；**漏最後 reset 會讓夜間改善合併不進去（09-11 卡住兩條）**
 - [退回改走小修正規格](reject-tweak-spec.md) — 未重啟；小修正規格送不到 QA
@@ -121,6 +109,6 @@
 - [對話 AI 自己開建任務視窗](chat-open-task-side-channel.md) — 第三條側通道 `<open-task>`；草稿用 AI 自己寫的、不帶圖是刻意的；已 push de25c212 **欠重啟未實跑**
 - [subagent 流程的實際 token 代價](subagent-review-pattern-token-cost.md) — 一個下午 23% 週額度／19 支／310 萬；該砍哪裡、整枝審查不要砍
 - [舊版前端已整個退役](legacy-frontend-retired.md) — 四個功能從此沒畫面（含整個收件匣頁）；盲刪會白畫四頁而測試全綠
-- [階段 5 更版機制上線但沒設定](stage5-release-live-unconfigured.md) — release_window 是 null 所以不會動；版面被使用者推翻成併回改善提案
-- [產品化規格書已上版控](docs-handoff-tracked.md) — 09-23 commit `11f7b982`；always.md 第 8 條只對其餘 docs/ 成立；記憶快照在 `docs/handoff/memory/`
+- [階段 5 更版機制上線](stage5-release-live-unconfigured.md) — 09-24 維護時段已設成週六日 01:00 起五小時，但一次都還沒跑過；版面被使用者推翻成併回改善提案
+- [產品化規格書已上版控](docs-handoff-tracked.md) — 09-24 起換機還原已接進 `install.sh`（`scripts/lib/handoff.js`）；快照要手動 `--snapshot`
 - [階段 3 換認證那半完成](stage3-byok-auth-half-done.md) — 客戶沒 key 必須失敗不可退回平台；容器兩份清單只加一份會把 key 印在 ps 上

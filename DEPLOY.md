@@ -37,6 +37,10 @@
 
 完成後瀏覽器會自動開啟 `http://localhost:3939/setup.html`。
 
+安裝過程也會自動還原**換機接手包**（`docs/handoff/`）：平台開發記憶、`~/.claude/CLAUDE.md`／
+`RTK.md`、全域 skill 與 Claude 設定，一律只補不覆蓋。細節與「腳本做不到、必須人工補」的清單
+見 `docs/handoff/README.md`。
+
 > **Ubuntu 首次安裝兩個常見手動點**：
 > - **PostgreSQL peer auth**：`apt` 裝的 `postgres` 帳號預設無密碼、走 peer auth，腳本的 admin 連線常失敗而無法自動建 role/db。裝前先 `export PGADMIN_USER=postgres PGADMIN_PASSWORD=...`，或先 `sudo -u postgres psql` 手動建好 role＋db（腳本偵測已存在會跳過）。詳見下方「疑難排解」。
 > - **Docker 群組需重登**：`install.sh` 裝完 Docker 後把你加進 `docker` 群組，但**當前 session 尚未生效**，VPN Gateway image 這關會被 `[SKIP]`。登出再登入後重跑 `node scripts/setup.js` 即補上（非必要功能可略過）。

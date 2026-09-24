@@ -10,6 +10,8 @@ metadata:
 生產機（`192.168.10.110`，對外走 `ideaxpress.biz`）的實際部署（非 repo 內、屬 host-specific，`data/config.json` + 外部容器）：
 
 - **平台本體**：跑在 `odoo-v2` 容器，node 監聽 **8771**（`config.json` `PORT`）。基底網域 `odoo-ai-dev.ideaxpress.biz:443 → host.docker.internal:8771`。
+  - **`config.json` 必須有 `BIND_HOST=10.0.0.1`，少了就整站 502**（2026-09-24 實際發生）。`index.js` 自 `9a8f7c3f` 起預設只聽 `127.0.0.1`；容器走 host 網路，那等於只有宿主自己連得到，bridge 上的 nginx 全部吃閉門羹。`start.sh` 會從 `config.json` 讀它並 export。
+  - **這個值只活在 `data/config.json`，而該檔不在版控**——換機器、重跑 setup、或 config 重建時會靜默消失，症狀要到下次重啟才爆，且與當天的改動無關，極難聯想。
 - **測試區（odoo-envs）**：`ENV_BIND_HOST=10.0.0.1`（docker 網路閘道），容器 `docker run -p 10.0.0.1:<port>:8069`。`ENV_PUBLIC_URL_TEMPLATE=https://odoo-ai-dev.ideaxpress.biz:{port}`（**埠模式**：單一裸網域，靠埠號區分）。
 - **埠池**：`PROJECT_PORT_MIN/MAX=21000-21099`（100 個，`config.json` 蓋掉預設 21000-21012）。租約制見 [[port-pool-lease-model]]。
 - **共用反向代理**：`agency-NginxUI-1`（uozi/nginx-ui v2.1.5），佔對外 80/443/9000，並 publish `192.168.10.110:21000-21099`。**此 nginx 與多個正式站共用**（sites-enabled：AICEO、IDX、IDX_API、register、starlight、Registry、odoo-ai-dev），改設定會波及它們。

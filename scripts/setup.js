@@ -10,6 +10,7 @@ const { ensurePostgres } = require('./lib/postgres');
 const { ensureClaudeEnv } = require('./lib/claude-env');
 const { ensureCodexCli } = require('./lib/codex-env');
 const { verifyRuntimeDeps } = require('./lib/checks');
+const { restoreHandoff } = require('./lib/handoff');
 const { verifyDocker, ensureGatewayImage, ensureAgentImage } = require('./lib/docker');
 
 const ROOT = path.resolve(__dirname, '..');
@@ -65,6 +66,11 @@ async function main() {
 
   ensureCodexCli();
   console.log('[OK] Codex CLI 已就緒');
+
+  // 排在 Claude 環境之後：登入流程會先把 ~/.claude 建出來，設定才有地方合併。
+  for (const step of restoreHandoff({ root: ROOT }).steps) {
+    console.log(`[${step.status === 'done' ? 'OK' : 'SKIP'}] ${step.name}：${step.detail}`);
+  }
 
   // 排在這裡是因為兩個 build-arg 分別要等 npm install（context7-mcp 版本）與 claude 安裝（claude --version）。
   // 建置失敗不中斷安裝——比照 Chrome：平台本身仍可用，缺的是容器隔離模式。但要大聲講，
