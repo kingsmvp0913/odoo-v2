@@ -725,15 +725,17 @@ describe('公司管理頁：詳細畫面的四個分頁與四顆開關', () => {
     return m ? [...m[1].matchAll(/key: "([a-z]+)"/g)].map((x) => x[1]) : [];
   })();
 
-  test('分頁字面清單撈得到，四個一個不少', () => {
-    expect(tabKeys).toEqual(['basic', 'features', 'projects', 'git']);
+  // 2026-09-24 新增 apikey：客戶自己付錢的 Anthropic key，與 GIT 憑證分開一頁
+  //（兩者是不同家的憑證，放同一頁會讓人以為清除其中一個會連帶影響另一個）。
+  test('分頁字面清單撈得到，五個一個不少', () => {
+    expect(tabKeys).toEqual(['basic', 'features', 'projects', 'git', 'apikey']);
   });
 
   // 清單有四個鍵、畫面只畫三塊面板，是「有分頁按鈕、按了一片空白」——
   // 所以面板數要獨立釘，不能只驗鍵。
-  test('四個分頁各有一塊面板', () => {
+  test('每個分頁各有一塊面板', () => {
     const panels = template.match(/<section v-show="tab==='[a-z]+'" class="ui-next-panel">/g) || [];
-    expect(panels).toHaveLength(4);
+    expect(panels).toHaveLength(5);
     expect(panels).toHaveLength(tabKeys.length);
     for (const key of tabKeys) {
       expect(`${key} 面板: ${detail.includes(`<section v-show="tab==='${key}'" class="ui-next-panel">`)}`)

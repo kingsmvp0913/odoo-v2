@@ -26,6 +26,13 @@
         internalCompany: false,
         activeUntil: null,
         savingBudget: false,
+        // Anthropic API key：只存「有沒有設」，永遠不放原文（後端也不回傳）
+        keyConfigured: false,
+        keyStatusError: "",   // 讀不到狀態時不可以顯示成「未設定」
+        keyInput: "",
+        savingKey: false,
+        clearingKey: false,
+        keyError: "",
       };
     },
     computed: {
@@ -54,6 +61,17 @@
         } finally {
           this.loading = false;
         }
+        // ⚠ key 狀態**刻意不併進上面那個 Promise.all**：併進去的話，這一支失敗會讓
+        // 整頁只剩一行錯誤——帳號列表、花費上限全部不見。實測過（新端點還沒上線時
+        // 回 404，整頁變成紅字 Not found）。這一塊壞掉只該讓這一塊壞掉。
+        try {
+          const key = await Api.get("company/anthropic-key");
+          this.keyConfigured = !!key.configured;
+          this.keyStatusError = "";
+        } catch (e) {
+          // 不知道有沒有設定時，不可以顯示成「未設定」——那會讓人以為要重貼一把。
+          this.keyStatusError = e.message || "無法讀取 API key 狀態";
+        }
       },
       async saveTaskBudget() {
         const amount = String(this.taskBudgetInput).trim() === "" ? null : Number(this.taskBudgetInput);
@@ -67,6 +85,41 @@
           showToast("已儲存任務花費上限", "success");
         } catch (e) { showToast(e.message || "儲存任務花費上限失敗", "error"); }
         finally { this.savingBudget = false; }
+      },
+      // 客戶自己換 key（2026-09-24 裁決「兩邊都要能填」）。key 會過期、會旋轉，
+      // 每次都要找平台代填等於把客戶卡在我們的工時上。
+      async saveKey() {
+        if (!this.keyInput) return showToast("請貼上 API key", "error");
+        this.savingKey = true;
+        this.keyError = "";
+        try {
+          // 不帶任何公司參數：後端一律從 req.actor 取自己的公司（同 task-budget）。
+          const r = await Api.put("company/anthropic-key", { api_key: this.keyInput });
+          this.keyInput = "";          // 存好就清掉，畫面上不留明碼
+          this.keyConfigured = true;
+          // warning＝存進去了但沒驗成功。「已儲存」與「已儲存且驗過」是兩件事，要講出來。
+          showToast(r && r.warning ? r.warning : "已更新 API key", r && r.warning ? "error" : "success");
+        } catch (e) {
+          this.keyError = e.message || "儲存失敗";
+        } finally { this.savingKey = false; }
+      },
+      async clearKey() {
+        const ok = await confirmDialog({
+          title: "清除 API key？",
+          message: "清除後貴公司的 AI 會直接停止運作，直到重新設定為止。",
+          danger: true,
+          confirmText: "清除",
+        });
+        if (!ok) return;
+        this.clearingKey = true;
+        try {
+          await Api.delete("company/anthropic-key");
+          this.keyConfigured = false;
+          this.keyInput = "";
+          this.keyError = "";
+          showToast("已清除 API key", "success");
+        } catch (e) { showToast(e.message || "清除失敗", "error", 0); }
+        finally { this.clearingKey = false; }
       },
       async addUser() {
         if (!this.newUser.username || !this.newUser.password) return showToast("請填寫帳號和密碼", "error");
@@ -143,6 +196,33 @@
             <input id="company-task-budget" v-model="taskBudgetInput" type="number" min="0.01" step="0.01" class="field-input" placeholder="尚未設定" />
           </div>
           <div class="ui-next-panel-actions"><button class="btn btn-primary btn-sm" :disabled="savingBudget" @click="saveTaskBudget">{{ savingBudget ? '儲存中…' : '儲存上限' }}</button></div>
+        </div>
+
+        <!-- 排在花費上限後面：兩者都是「貴公司的 AI 花費」設定，放一起才找得到。
+             內部公司不顯示（後端也會擋）——內部用平台訂閱，沒有自己的 key。 -->
+        <div v-if="!loading && !loadError && !internalCompany" class="settings-section">
+          <h2 class="section-title">Anthropic API key</h2>
+          <p class="ui-next-field-note">
+            目前狀態：
+            <span v-if="keyStatusError" class="pill pill-warn">讀不到狀態</span>
+            <span v-else class="pill" :class="keyConfigured ? 'pill-success' : 'pill-warn'">{{ keyConfigured ? '已設定' : '未設定' }}</span>
+          </p>
+          <div v-if="keyStatusError" class="error-msg">{{ keyStatusError }}</div>
+          <p class="ui-next-field-note">
+            貴公司的 AI 用量由這把 key 直接與 Anthropic 結算。儲存前系統會拿它實跑一次驗證，可能需要幾秒到一分鐘；系統從不回傳已儲存的 key，要更換請重新貼上完整的一把。
+          </p>
+          <p class="ui-next-field-note">
+            <strong>沒有設定或清除之後，貴公司的 AI 會直接停止運作。</strong>
+          </p>
+          <div class="field-item">
+            <label class="field-label" for="company-anthropic-key">API key</label>
+            <input id="company-anthropic-key" v-model="keyInput" type="password" class="field-input" placeholder="重新貼上完整的 key 才會更新" />
+          </div>
+          <div v-if="keyError" class="error-msg">{{ keyError }}</div>
+          <div class="ui-next-panel-actions">
+            <button class="btn btn-primary btn-sm" :disabled="savingKey" @click="saveKey">{{ savingKey ? '驗證並儲存中…' : '儲存 API key' }}</button>
+            <button v-if="keyConfigured" class="btn btn-outline btn-sm" :disabled="clearingKey" @click="clearKey">{{ clearingKey ? '清除中…' : '清除 API key' }}</button>
+          </div>
         </div>
 
         <div v-if="!loadError" class="settings-section">
