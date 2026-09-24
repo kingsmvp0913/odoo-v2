@@ -30,6 +30,42 @@ async function _dispatchConflictToAdmins(taskId) {
   await Promise.all(rows.map(r => _dispatchAction(r.id, taskId, 'merge_conflict')));
 }
 
+async function notifyProjectReleaseFailure(projectId, projectName, tasks) {
+  const { rows: platformAdmins } = await query("SELECT id FROM users WHERE role = 'admin'");
+  const { rows: companyAdmins } = await query(
+    `SELECT u.id, u.company_id FROM users u
+       JOIN project_companies pc ON pc.company_id = u.company_id
+      WHERE pc.project_id = $1 AND u.role = 'company_admin'`, [projectId]
+  );
+  const taskIds = (tasks || []).map(t => t.id);
+  const { rows: taskCompanies } = taskIds.length ? await query(
+    `SELECT t.id, u.company_id FROM tasks t JOIN users u ON u.id = t.user_id
+      WHERE t.id IN (${taskIds.map((_, i) => `$${i + 1}`).join(',')})`, taskIds
+  ) : { rows: [] };
+  const taskByCompany = new Map(taskCompanies.map(t => [Number(t.company_id), t.id]));
+  const summary = '客戶正式區部署失敗；請檢查程式檔案還原結果，資料庫改動不會還原。';
+  const recipients = new Map(platformAdmins.map(r => [r.id, taskIds[0] || null]));
+  for (const admin of companyAdmins) recipients.set(admin.id, taskByCompany.get(Number(admin.company_id)) || null);
+  for (const [userId, taskId] of recipients) {
+    if (taskId) await addInboxEvent(userId, taskId, 'release_failure', { status: 'release_failed', summary }).catch(() => {});
+    notifyAction(userId, { taskId, status: 'release_failed', label: '正式部署失敗', title: projectName, projectId, summary, persisted: !!taskId });
+  }
+}
+
+async function notifyProjectMergeFailure(projectId, projectName) {
+  const { rows: admins } = await query("SELECT id FROM users WHERE role = 'admin'");
+  const { rows: [pending] } = await query(
+    'SELECT id FROM tasks WHERE project_id = $1 AND approved_at IS NOT NULL AND merged_to_main_at IS NULL ORDER BY approved_at LIMIT 1',
+    [projectId]
+  );
+  const taskId = pending?.id || null;
+  const summary = '上正式合併 main 失敗；任務尚未標記已上正式，請平台管理員處理。';
+  for (const admin of admins) {
+    if (taskId) await addInboxEvent(admin.id, taskId, 'release_failure', { status: 'merge_failed', summary }).catch(() => {});
+    notifyAction(admin.id, { taskId, status: 'merge_failed', label: '上正式合併失敗', title: projectName, projectId, summary, persisted: !!taskId });
+  }
+}
+
 function emitAll(event, data) {
   if (_io) _io.emit(event, data);
 }
@@ -58,4 +94,4 @@ async function _dispatchAction(userId, taskDbId, status) {
   notifyAction(userId, { taskId: taskDbId, task_id, title, status });
 }
 
-module.exports = { setIo, emitToUser, emitAll, notifyAction, registerChannel, ACTION_STATUSES };
+module.exports = { setIo, emitToUser, emitAll, notifyAction, notifyProjectReleaseFailure, notifyProjectMergeFailure, registerChannel, ACTION_STATUSES };

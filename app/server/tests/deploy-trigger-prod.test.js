@@ -77,6 +77,7 @@ test('有啟用的正式區目標時，上正式之後接著部署', async () =>
   expect(runDeployGroup).toHaveBeenCalledTimes(1);
   expect(runDeployGroup.mock.calls[0][1].trigger).toBe('manual_prod');
   expect(res.body.deploy[0].ok).toBe(true);
+  expect((await dbModule.query("SELECT id FROM user_inbox WHERE kind = 'release_failure'")).rows).toHaveLength(0);
 });
 
 // 意圖：關著開關的人會以為程式沒上去，或以為部署過了。兩種誤解都要避免。
@@ -87,6 +88,7 @@ test('專案開關關閉時回應帶 deploySkipped，且不部署', async () => 
   expect(res.body.deploySkipped).toBe(true);
   expect(res.body.deploy).toEqual([]);
   expect(runDeployGroup).not.toHaveBeenCalled();
+  expect((await dbModule.query("SELECT id FROM user_inbox WHERE kind = 'release_failure'")).rows).toHaveLength(0);
 });
 
 // deploySkipped 的語意已擴大：從「開關關著」變成「這次沒有部署，原因在 deploySkipReason」。
@@ -118,6 +120,78 @@ test('部署失敗時 /release 仍回 ok:true，失敗放在 deploy 裡', async 
   expect(res.body.ok).toBe(true);
   expect(res.body.deploy[0].ok).toBe(false);
   expect(res.body.deploy[0].error).toMatch(/健康檢查/);
+});
+
+test('正式部署失敗通知平台與綁定公司的管理員，不通知未綁定公司', async () => {
+  const { rows: [bound] } = await dbModule.query(
+    "INSERT INTO companies (name, is_active) VALUES ('部署通知甲', true) RETURNING id"
+  );
+  const { rows: [other] } = await dbModule.query(
+    "INSERT INTO companies (name, is_active) VALUES ('部署通知乙', true) RETURNING id"
+  );
+  await dbModule.query('INSERT INTO project_companies (project_id, company_id) VALUES ($1,$2)', [projectId, bound.id]);
+  const hash = await require('bcryptjs').hash('pw', 4);
+  const { rows: [boundAdmin] } = await dbModule.query(
+    "INSERT INTO users (username, password_hash, display_name, role, company_id) VALUES ('deployBound',$1,'甲管理員','company_admin',$2) RETURNING id",
+    [hash, bound.id]
+  );
+  await dbModule.query("UPDATE tasks SET user_id = $1 WHERE task_id = 'task_pa_1'", [boundAdmin.id]);
+  await dbModule.query('INSERT INTO project_companies (project_id, company_id) VALUES ($1,$2)', [projectId, other.id]);
+  const { rows: [otherAdmin] } = await dbModule.query(
+    "INSERT INTO users (username, password_hash, display_name, role, company_id) VALUES ('deployOther',$1,'乙管理員','company_admin',$2) RETURNING id",
+    [hash, other.id]
+  );
+  const { rows: [unbound] } = await dbModule.query(
+    "INSERT INTO companies (name, is_active) VALUES ('部署通知丙', true) RETURNING id"
+  );
+  const { rows: [unboundAdmin] } = await dbModule.query(
+    "INSERT INTO users (username, password_hash, display_name, role, company_id) VALUES ('deployUnbound',$1,'丙管理員','company_admin',$2) RETURNING id",
+    [hash, unbound.id]
+  );
+  const notify = require('../notify');
+  const emitted = [];
+  notify.setIo({ to: room => ({ emit: (event, payload) => emitted.push({ room, event, payload }) }) });
+  runDeployGroup.mockImplementation(async (ids) => ids.map(id => ({ targetId: id, ok: false, error: '健康檢查未通過' })));
+  await addTarget('prod', true);
+  const res = await release();
+  notify.setIo(null);
+  expect(res.status).toBe(200);
+  expect(res.body.ok).toBe(true);
+  const { rows: alerts } = await dbModule.query("SELECT user_id, kind, summary FROM user_inbox WHERE kind = 'release_failure'");
+  expect(alerts.map(a => a.user_id).sort((a, b) => a - b)).toEqual([1, boundAdmin.id].sort((a, b) => a - b));
+  expect(alerts.map(a => a.user_id)).not.toContain(otherAdmin.id);
+  expect(alerts.every(a => a.summary.includes('資料庫'))).toBe(true);
+  const notified = emitted.filter(e => e.event === 'notify:action').map(e => e.room);
+  expect(notified).toEqual(expect.arrayContaining([`user:1`, `user:${boundAdmin.id}`, `user:${otherAdmin.id}`]));
+  expect(notified).not.toContain(`user:${unboundAdmin.id}`);
+});
+
+test('客戶上正式遇到合併衝突只看到白話訊息，平台收到待處理通知', async () => {
+  const { rows: [company] } = await dbModule.query(
+    "INSERT INTO companies (name, is_active) VALUES ('合併通知甲', true) RETURNING id"
+  );
+  await dbModule.query(
+    'INSERT INTO project_companies (project_id, company_id, can_release) VALUES ($1,$2,true)',
+    [projectId, company.id]
+  );
+  const hash = await require('bcryptjs').hash('pw', 4);
+  await dbModule.query(
+    "INSERT INTO users (username, password_hash, display_name, role, company_id) VALUES ('mergeCustomer',$1,'客戶管理員','company_admin',$2)",
+    [hash, company.id]
+  );
+  const customerToken = (await request(app).post('/api/auth/login').send({ username: 'mergeCustomer', password: 'pw' })).body.token;
+  require('../pipeline/git').releaseAiToMain.mockResolvedValueOnce({
+    merged: false, hasConflicts: true, conflictFiles: ['internal-secret.py'], error: 'Git stderr secret',
+  });
+  await addTarget('prod', true);
+  const res = await release({ confirmDeploy: true }, customerToken);
+  expect(res.status).toBe(200);
+  expect(res.body.ok).toBe(false);
+  expect(JSON.stringify(res.body)).not.toContain('internal-secret.py');
+  expect(JSON.stringify(res.body)).not.toContain('Git stderr secret');
+  expect(JSON.stringify(res.body)).toContain('平台');
+  const { rows: alerts } = await dbModule.query("SELECT user_id, status FROM user_inbox WHERE kind = 'release_failure'");
+  expect(alerts).toEqual([{ user_id: 1, status: 'merge_failed' }]);
 });
 
 test('部署丟例外也不讓 /release 回 500', async () => {
@@ -205,7 +279,7 @@ test('pending-release 帶出「這一按會不會動到正式區」', async () =
   await addTarget('test', true);       // 測試區不算
   const res = await request(app).get(`/api/projects/${projectId}/pending-release`)
     .set('Authorization', `Bearer ${token}`);
-  expect(res.body.prodDeploy).toEqual({ autoDeploy: true, targets: 1, isAdmin: true });
+  expect(res.body.prodDeploy).toEqual({ autoDeploy: true, targets: 1, canRelease: true });
 });
 
 // ── 上正式的結果要進任務對話 ────────────────────────────────────────

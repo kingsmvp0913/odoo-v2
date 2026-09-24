@@ -1014,7 +1014,7 @@ function registerRoutes(app) {
       // 「看不到」與「真的不存在」——先過 loadProjectForActor 的範圍檢查再讓它接手，
       // 才不會讓別家公司的管理員用「打得到 403 還是 404」當 oracle 探出 id 存在。
       // ⚠ 別把這一步搬到 canReleaseProject 之後、也別改回裸的 SELECT，那正是本輪要補的洞。
-      const project = await loadProjectForActor(req.params.id, req, 'id');
+      const project = await loadProjectForActor(req.params.id, req, 'id, name');
       if (!project) return res.status(404).json({ error: 'Not found' });
 
       // 上正式是專案層批次，會把同事已核准的任務一起帶上去，所以必須有人負責（規格 §4.3）：
@@ -1033,7 +1033,7 @@ function registerRoutes(app) {
       try {
         gitEnv = await buildGitEnv(req.userId);
       } catch (e) {
-        if (e.code === 'NO_GIT_CRED') return res.status(400).json({ error: '請先到設定填個人 GitHub PAT' });
+        if (e.code === 'NO_GIT_CRED') return res.status(400).json({ error: req.actor.isPlatformAdmin ? '請先到設定填個人 GitHub PAT' : '公司尚未設定 GIT，請聯絡平台' });
         throw e;
       }
 
@@ -1065,6 +1065,11 @@ function registerRoutes(app) {
       // 全部 repo 都成功、且至少有一個真的合了才標記——寧可下次多列幾張，也不要標了卻沒上去。
       const allOk = results.every(r => !r.error && !r.hasConflicts);
       const anyMerged = results.some(r => r.merged);
+      if (!allOk) {
+        await require('./notify').notifyProjectMergeFailure(project.id, project.name).catch(err => {
+          console.error('[RELEASE] 合併失敗通知未送達:', err.message);
+        });
+      }
       let tasks = [];
       if (allOk && anyMerged) {
         const { rows } = await query(
@@ -1140,9 +1145,17 @@ function registerRoutes(app) {
             [t.id, `[上正式] 程式已併入 main（使用${sourceLabel}推送）。\n${detail}`]
           ).catch(() => {});
         }
+        if (!deploySkipped && deploy.some(d => !d.ok)) {
+          await require('./notify').notifyProjectReleaseFailure(project.id, project.name, tasks).catch(err => {
+            console.error('[RELEASE] 部署失敗通知未送達:', err.message);
+          });
+        }
       }
 
-      res.json({ ok: allOk, repos: results, tasks, deploy, deploySkipped, deploySkipReason });
+      const visibleResults = req.actor.isPlatformAdmin ? results : results.map(r =>
+        (r.error || r.hasConflicts) ? { ...r, conflictFiles: [], error: '程式合併失敗，平台管理員處理中。' } : r
+      );
+      res.json({ ok: allOk, repos: visibleResults, tasks, deploy, deploySkipped, deploySkipReason });
     } catch (err) { res.status(500).json({ error: err.message }); }
   });
 

@@ -143,16 +143,16 @@ describe('上正式（規格 §4.3 can_release）', () => {
     // 測試環境沒有個人 PAT，下一步 buildGitEnv 會擋在 400——這正是本測試要的證據：
     // 403（canReleaseProject）與 404（loadProjectForActor）都沒攔下它，代表真的放行過關了。
     expect(res.status).toBe(400);
-    expect(res.body.error).toBe('請先到設定填個人 GitHub PAT');
+    expect(res.body.error).toBe('公司尚未設定 GIT，請聯絡平台');
   });
 });
 
-// PENDING_RELEASE_SQL 沒有 user 條件——看得到專案不等於能看見全公司同事已核准任務的標題，
-// 門檻必須跟按不按得下「上正式」一致（全跑修法波第 1 項）。
-describe('待上正式清單（GET pending-release，規格 §8 P1）', () => {
-  test('自己公司的一般使用者看得到專案，但沒有上正式的權限 → 403（不是 200，否則洩漏全公司任務標題）', async () => {
+// 規格 §8 P5 後來裁決：可見專案的成員能唯讀清單；真正按上正式仍走 canReleaseProject。
+describe('待上正式清單（GET pending-release，規格 §8 P5）', () => {
+  test('自己公司的一般使用者可唯讀清單，但沒有上正式的權限', async () => {
     const res = await request(app).get(`/api/projects/${pA}/pending-release`).set(as(aToken));
-    expect(res.status).toBe(403);
+    expect(res.status).toBe(200);
+    expect(res.body.prodDeploy.canRelease).toBe(false);
   });
 
   test('平台管理員 → 200', async () => {

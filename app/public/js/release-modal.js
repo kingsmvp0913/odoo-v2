@@ -142,8 +142,8 @@ window.ReleaseModal = {
               <div v-for="r in repos" :key="r.label" style="margin-bottom:var(--space-2)">
                 <div style="font-size:var(--fs-base);font-weight:var(--fw-semibold)">{{ r.label }}</div>
                 <div v-if="r.hasConflicts" class="error-msg">
-                  <div>合併衝突，未上正式。main 有平台以外的改動，請先在 GitHub 上處理。</div>
-                  <div style="margin-top:4px">衝突檔案：</div>
+                  <div>程式合併遇到衝突，尚未上正式。平台管理員處理中。</div>
+                  <div v-if="r.conflictFiles.length" style="margin-top:4px">衝突檔案：</div>
                   <div v-for="f in r.conflictFiles" :key="f" style="font-family:monospace;font-size:var(--fs-xs)">{{ f }}</div>
                 </div>
                 <div v-else-if="r.error" class="error-msg" style="white-space:pre-wrap">{{ r.error }}</div>
