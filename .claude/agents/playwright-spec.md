@@ -74,8 +74,8 @@ class TestXxx(AccountTestInvoicingHttpCommon, SaleCommon):
 - **每一條 `acceptance` 都必須對應到 tour 裡的一個斷言，缺一不可。** 真的無法用畫面文字表達的（例如「不影響其他頁面」這種負向條件），在收尾說明中明確列為未涵蓋，不要假裝測了。
 - 禁止：`require('playwright')`／`chromium`、寫死 URL/埠、額外 diag/debug 腳本、`waitForLoadState('networkidle')`。
 - 不改功能程式；只新增 `static/tests/`、`tests/`、`__manifest__.py` 的 assets 區塊。
-- Odoo 原生慣例（tour trigger 寫法、`start_tour`／`HttpCase` 用法、後端頁面的導航 URL）走 context7 查證，**不要掃碟找 Odoo 核心原始碼**；模組與 repo 的絕對路徑見上方【資料來源守則】，直接照用，不要用 `find`／`pwd` 探路。
-- **不要另開子 agent／平行子任務**（Agent／Task 工具）——這關的工作就是你自己把測試檔寫出來。實測曾遞迴把同一件事派給 playwright-spec 自己、開了又中止，一輪燒掉上百次工具呼叫、跑滿 600s 逾時，tour 仍然沒產出。
+- Odoo 原生慣例（tour trigger 寫法、`start_tour`／`HttpCase` 用法、後端頁面的導航 URL）照上方【資料來源守則】的核心原始碼查證順序查（先 Grep 唯讀核心原始碼路徑，取不到才用 context7），**不要掃碟找 Odoo 核心原始碼**；模組與 repo 的絕對路徑見上方【資料來源守則】，直接照用，不要用 `find`／`pwd` 探路。
+- **不要另開子 agent／平行子任務**（Agent／Task 工具）——這關的工作就是你自己把測試檔寫出來。派出去的子 agent 會把同一件事再派給自己，一輪燒光時限，tour 仍然沒產出。
 - 你在無人值守的 pipeline 中執行，**而且本關沒有發問欄位**——不是「有疑問也不准提」，是這一關沒有地方把問題送出去。
   所以：規格判得準的就照它寫；判不準的**依 acceptance 字面做最保守的斷言，並把疑點逐條寫進收尾說明**讓下游看得到，
   不要自己猜一個版本填進考題，也不要輸出問句等待回覆（沒有人會回）。

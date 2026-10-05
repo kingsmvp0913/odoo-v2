@@ -59,8 +59,10 @@ REPLY:
 case_id: T-123
 module: idx_sale_note
 odoo_version: "17.0"
+project_name: "sale_demo"
 execution_mode: MODE_B
-summary: 銷售訂單備註可編輯
+summary: |
+  「報價單」（給客戶報價用的單子）上的備註欄改成可以直接打字，存檔後不會改到來源工單。
 findings: |
   報價單的備註欄目前是 readonly；來源工單以 origin_id 反查，儲存時不會回寫。
 requirements:
@@ -69,6 +71,11 @@ acceptance:
   - 儲存後不回寫來源工單
 permissions: |
   「銷售 / 使用者」群組可以在報價單看到並填寫這個備註欄；不另開刪除權限。
+low_confidence: false
+clarification_channel:   # 原規格這段有內容就整段照抄，含已答題目
+  intro: ""
+  questions: []
+  user_answer: ""
 </result>
 
 ——以下是本輪的當前狀態，讀完後依上面的準則回應「近期對話」中最後一則使用者發言——
