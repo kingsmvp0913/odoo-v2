@@ -2,7 +2,7 @@
 paths:
   - "scripts/**"
   - "app/server/lib/**"
-  - "app/server/env-agent.js"
+  - "app/server/pipeline/env-agent.js"
 ---
 
 # 平台開發：基礎設施與腳本
@@ -13,9 +13,9 @@ paths:
 113. **`scripts/` 目錄下的程式不得 `require` npm 套件，DB 操作改用系統 `psql` CLI** — Node 模組解析不跨目錄樹，`scripts/lib/` 往上找不到 `app/node_modules`。
 114. **平台的 runtime 相依要補在 `scripts/setup.js`，不是 `install.ps1/.sh`** — native bootstrap 只裝系統套件就交棒 setup.js，補在那裡才同時覆蓋 Windows 與 Linux。
 115. **用宿主 Python 跑腳本時 interpreter 一律取 `PYTHON_BIN || (win ? python : python3)`** — Linux 上 pip 裝進 `python3`，呼叫 `python` 會 ENOENT。
-115b. **〔2026-08-08 已移除自動索引〕graphify 索引的 pip 相依是 `graphifyy`（import 名是 `graphify`，兩者不同）＋`networkx`** — PEP 668 管制的環境要退 `--user --break-system-packages`，否則全新 Ubuntu 一鍵安裝會讓 repo 一建立就 `graphify_status='error'` 靜默失敗。**現況**：`setup.js` 不再安裝這兩個套件，腳本退居 `scripts/graphify_index.py` 手動工具；此條保留是因為手動跑仍會踩同一個 PEP 668 坑。
+115b. **手動跑 `scripts/graphify_index.py` 前要自己裝 `graphifyy`（import 名是 `graphify`，兩者不同）＋`networkx`** — `setup.js` 不裝它們；PEP 668 管制的環境要退 `--user --break-system-packages`。
 116. **pip 安裝要準備 PEP 668 退路**：先普通裝，失敗改 `--user --break-system-packages` 重試，仍 import 不到就 throw（fail loud）。
-117. **任何含中文字面量的 `.ps1` 必須存成 UTF-8 with BOM** — PowerShell 5.1 讀無 BOM 檔用系統 ANSI codepage 解碼，與 `chcp` 無關。**此 repo 現有 .ps1 全都沒 BOM**。
+117. **任何含中文字面量的 `.ps1` 必須存成 UTF-8 with BOM** — PowerShell 5.1 讀無 BOM 檔用系統 ANSI codepage 解碼，與 `chcp` 無關。
 118. **平台不自行起 PostgreSQL 容器，用本機 PG——但 5432 可能被既存第三方容器佔走，apt 安裝會自動退到 5434** — 先 `pg_lsclusters` 確認實際 port。改密碼要同時改 role 與 `data/config.json` 的 `DATABASE_URL` 再重啟。
 119. **部署機的服務帳號要用 Docker 必須先 `sudo usermod -aG docker <user>` 並重登** — 僅給 sudo 不代表在 docker 群組。
 120. **平台綁 `*:3939`；GCP VM 上連不到是 VPC 防火牆（timeout 而非 refused），不要改 app 的 bind 位址** — 解法是放行 3939 或 `ssh -N -L 3939:localhost:3939`。
@@ -37,7 +37,7 @@ paths:
 132. **`claude` CLI 的 `Not logged in` 走 stdout 而非 stderr** — 只掃 stderr 會漏掉，錯誤被吞成泛用 `exited with code 1`。認證失敗應歸類為 transient。
 133. **`/api/oauth/usage` 是非官方逆向端點且限流很兇，60s TTL 快取是必需品不是最佳化** — 官方 Admin/Analytics API 給的是 API 花費而非訂閱視窗。抓取失敗必須 fail loud，否則會靜靜卡在 stale snapshot 上。
 134. **Claude 用量是全平台單一帳號共用（`~/.claude/.credentials.json`），用量閘門必須是全域的**。
-135. **Serena MCP 已於 2026-08-24 全面移除（Claude Code user scope、Codex、本 repo 的 setup 與 Dockerfile），不要再裝回來** — 三個月零工具呼叫（transcript 與 serena 自身 log 雙向查證），Grep/Read 已覆蓋 repo 內 symbol 查詢，Claude Code v2.0.74+ 亦已內建 LSP。連帶：`uv/uvx` 在本 repo 只為 serena 而存在，已一併從 `checks.js`／`install.sh`／`install.ps1`／`Dockerfile`／`DEPLOY.md` 移除。
+135. **不要裝 Serena MCP，也不要為它加回 `uv/uvx` 相依** — 實測三個月零工具呼叫；Grep/Read 與 Claude Code 內建 LSP 已涵蓋 symbol 查詢。
 136. **範圍窄、有明確答案的驗證類 subagent 一律指定 `model: 'sonnet'`** — 數量多，用高階模型會撞 session limit 全數失敗；失敗的 agent 呼叫不會進 Workflow 的 resume 快取。
 
 ### VPN（若新主機要用）

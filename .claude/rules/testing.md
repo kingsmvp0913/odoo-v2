@@ -27,5 +27,5 @@ paths:
 26. **不要為了注入設定把同步函式改成 async** — `runClaude` 變 async 會讓 spawn 晚一個 microtask，既有「呼叫後同步對 mock child 發事件」的測試整片失效。改用同步讀取＋啟動載入＋存檔失效的快取模式。
 27. **tour／測試指令 exit 0 不等於有跑測試** — 0 個測試也回 exit 0，必須檢查 log 內確有 `odoo.tests` 之類的執行標記。執行外部指令的 wrapper 即使成功也要回傳 stderr，否則下游「檢查 stderr 非空」的防線變成死碼。
 28. **跑測試用的 Odoo 指令要自取空閒埠並帶 `--http-port`** — 不指定會撞常駐的 8069。
-29. **查平台本地 DB 要手動帶 env** — 連線字串不在 env，藏在 repo 某支 `.ps1` config。用 `DATABASE_URL='postgres://…@localhost:5416/claude' node script.js`。
+29. **查平台本地 DB 要手動帶 env** — 連線字串在 `data/config.json` 的 `DATABASE_URL`，不在 shell env。用 `DATABASE_URL='postgres://…@localhost:5416/claude' node script.js`（或直接用 platformDB skill 的 `query.js`）。
 

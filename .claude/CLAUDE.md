@@ -1,26 +1,15 @@
 # CLAUDE.md
 
 <!-- platform-only -->
-> 註：舊的 PS1「開工」pipeline 已退役，全部改走網頁模式（`app/` 內的 Node pipeline）。
-> 本檔僅保留仍適用的通用開發規則。
-
 ## Skills
 - **getSQL** (`.claude/skills/getSQL/SKILL.md`) - 透過 SSH-SQLM API 查詢遠端 PostgreSQL。觸發：`/getSQL`
-When the user types `/getSQL`, invoke the Skill tool with `skill: "getSQL"` before doing anything else.
 - **platformDB** (`.claude/skills/platformDB/SKILL.md`) - 查平台自己的本地 PostgreSQL（`claude` DB／port 5416）：tasks、token_usage、彈跳計數、pipeline 指標、wiki 漂移觀測。觸發：`/platformDB`
-When the user types `/platformDB`, invoke the Skill tool with `skill: "platformDB"` before doing anything else.
 - **agentPrompt** (`.claude/skills/agentPrompt/SKILL.md`) - 改 `.claude/agents/*.md`、共用 prompt 片段（source-routing／systematic-debugging／cs-capability）或 agent-loader 注入設定**之前必讀**：placeholder／`<result>`／側通道契約與驗證方式。觸發：`/agentPrompt`
-When the user types `/agentPrompt`, invoke the Skill tool with `skill: "agentPrompt"` before doing anything else.
 - **debugTask** (`.claude/skills/debugTask/SKILL.md`) - 依 taskId 一鍵拉齊失敗任務的全部除錯資訊（狀態、彈跳計數、task_events、deploy/E2E/odoo log、setup_log）＋「症狀→看哪裡」判讀表。觸發：`/debugTask`
-When the user types `/debugTask`, invoke the Skill tool with `skill: "debugTask"` before doing anything else.
 - **platformDev** (`.claude/skills/platformDev/SKILL.md`) - 開發平台本體（`app/server`／`app/public`）的慣例：jest/pg-mem/supertest、測試配對、前端結構與**配色 dark-mode 硬規則**（動 `app/public` 前先載入）。觸發：`/platformDev`
-When the user types `/platformDev`, invoke the Skill tool with `skill: "platformDev"` before doing anything else.
 - **wikiQuery** (`.claude/skills/wikiQuery/SKILL.md`) - 查專案 wiki 知識庫（頁面清單／內容／troubleshooting 排障結論）與漂移修正流向。觸發：`/wikiQuery`
-When the user types `/wikiQuery`, invoke the Skill tool with `skill: "wikiQuery"` before doing anything else.
 - **healthCheck** (`.claude/skills/healthCheck/SKILL.md`) - 平台健檢判準：指標判讀、裁決的證據門檻、什麼才配列入修改、已知盲區。跑健檢、看健檢結果、或判斷某關要不要改 prompt 之前必讀。觸發：`/healthCheck`
-When the user types `/healthCheck`, invoke the Skill tool with `skill: "healthCheck"` before doing anything else.
 - **odooGlossary** (`.claude/skills/odooGlossary/SKILL.md`) - 查 Odoo 官方繁中術語表（25,015 條，抽自各版本 `zh_TW.po`）。決定欄位標籤／選單名／按鈕文字的中文怎麼寫時查它，別自己翻——自己翻的字對不上使用者實際看到的畫面。觸發：`/odooGlossary`
-When the user types `/odooGlossary`, invoke the Skill tool with `skill: "odooGlossary"` before doing anything else.
 <!-- /platform-only -->
 
 ## 0. Hard Rules
@@ -82,13 +71,11 @@ When the user types `/odooGlossary`, invoke the Skill tool with `skill: "odooGlo
 
 **Rule 4 — Goal-Driven Execution**: Define success criteria before starting. Iterate until verified. Don't follow steps mechanically; define success and drive to it. Strong success criteria enable independent looping.
 
-**Rule 6 — Token Budgets (not advisory)**: If approaching context limits, summarize and start fresh. Surface the breach explicitly — do not silently overrun.
-
 **Rule 7 — Surface Conflicts, Don't Average Them**: If two patterns contradict, pick one (more recent / more tested). Explain why. Flag the other for cleanup. Don't blend conflicting patterns.
 
 **Rule 9 — Tests Verify Intent**: Tests must encode WHY behavior matters, not just WHAT it does. A test that can't fail when business logic changes is wrong.
 
-**Rule 10 — Checkpoint After Every Significant Step**: Summarize what was done, what's verified, and what's left. Don't continue from a state you can't describe back. If you lose track, stop and restate.
+**Rule 10 — Know Your State**: Don't continue from a state you can't describe back; if you lose track, stop and restate what's done, verified, and left.
 
 **Rule 12 — Fail Loud**: "Completed" is wrong if anything was skipped silently. "Tests pass" is wrong if any were skipped. Default to surfacing uncertainty, not hiding it.
 

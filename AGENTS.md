@@ -1,9 +1,6 @@
 # AGENTS.md
 
 <!-- platform-only -->
-> 註：舊的 PS1「開工」pipeline 已退役，全部改走網頁模式（`app/` 內的 Node pipeline）。
-> 本檔僅保留仍適用的通用開發規則。
-
 ## Skills（本專案的參考文件）
 
 ⚠ **本檔（AGENTS.md）沒有任何程式在讀**，它只給互動式 Codex 看。pipeline 各關收到的規則是 `agent-loader.js` 的 `loadPipelineRules()` 從 **`.claude/CLAUDE.md`** 讀進去的（會先濾掉 `<!-- platform-only -->` 段落）。**想影響 pipeline 就得改 `.claude/CLAUDE.md`；改本檔對 pipeline 零效果，而且不會有任何警訊。**
@@ -23,8 +20,11 @@
 | `.agents/skills/odooDev/SKILL.md` | 改 Odoo 模組（model／view／權限／報表）、或判讀「這是 bug 還是原生行為」之前 |
 | `.agents/skills/wikiQuery/SKILL.md` | 查專案 wiki 知識庫：頁面清單／內容、troubleshooting 排障結論、漂移修正流向 |
 | `.agents/skills/pushRepo/SKILL.md` | 要 push 這個平台 repo 或使用者 PAT repo 到 GitHub 之前 |
+| `.agents/skills/chatFiles/SKILL.md` | 專案對話中使用者要你交付可下載檔案（Excel／CSV／Word／PDF／圖表／長文字）時 |
+| `.agents/skills/nightShift/SKILL.md` | 使用者下班前指派無人值守的夜班任務時 |
+| `.agents/skills/odooGlossary/SKILL.md` | 決定 Odoo 欄位標籤／選單名／按鈕文字的中文怎麼寫之前，查官方繁中術語 |
 
-> 這 11 支是 `.claude/skills/` 的副本，由 `node scripts/sync-skills.js` 產生：內容逐字一致，唯一的自動差異是執行指令的路徑（`node .agents/skills/...`）。**不要手改本目錄**——下次同步會覆蓋掉；要改請改 `.claude/skills/` 再跑同步。漂移由 `app/server/tests/skills-sync.test.js` 把關。
+> 這些是 `.claude/skills/` 的副本，由 `node scripts/sync-skills.js` 產生：內容逐字一致，唯一的自動差異是執行指令的路徑（`node .agents/skills/...`）。**不要手改本目錄**——下次同步會覆蓋掉；要改請改 `.claude/skills/` 再跑同步。漂移由 `app/server/tests/skills-sync.test.js` 把關。
 <!-- /platform-only -->
 
 ## 0. Hard Rules

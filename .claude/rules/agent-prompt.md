@@ -13,7 +13,7 @@ paths:
 101. **碰 git／在客戶 worktree 執行的關卡不能靠 SKILL.md 傳遞知識，必須用 agent-loader 注入片段** — 那些 agent 的 cwd 在客戶 worktree，載不到 odoo-v2 專案的 skill。
 102. **pipeline agent 能不能用 project skill 由子行程 cwd 決定** — chat 沒傳 cwd 故繼承 server（skill 原生可達）；coding／qa／reject_triage 的 cwd 是客戶 worktree，摸不到。`--strict-mcp-config` 只擋 MCP、不擋 skill；headless `claude -p` 會載入 cwd 的 project skill。
 103. **CLAUDE.md 裡 `<!-- platform-only -->` 區段會被 `loadPipelineRules()` 剝除** — 寫在那裡的內容對客戶關卡等同不存在。
-104. **共用片段只注入 `coding-project`／首輪 agent，不要同時注入 `coding-retry`／`qa-retry`** — retry 靠 `--resume` 繼承上一輪對話，重送等於重複佔 context。「兩者都拿」與「兩者都不拿」都是健檢認定的缺陷。
+104. **共用片段只注入首輪 agent，不要同時注入 `*-retry`（如 `qa-retry`）** — retry 靠 `--resume` 繼承上一輪對話，重送等於重複佔 context。「兩者都拿」與「兩者都不拿」都是健檢認定的缺陷。
 105. **多個 agent 共用的 persona／規則抽成 `.md` 片段，經 agent-loader 具名集合注入**（比照 `SOURCE_ROUTING_AGENTS`／`CS_CAPABILITY_AGENTS`）— 改一處兩邊生效；新增片段記得納入 `promptVersion`。
 106. **agent prompt 必須明令「核心 API 只能查 context7、嚴禁掃碟找 Odoo 核心原始碼、探索範圍限縮 worktree」** — worktree 內沒有 Odoo 核心，agent 會 `find /`／`Get-ChildItem C:\` 掃整個檔案系統，被守衛中止並白燒一整個 turn。
 107. **「引用 Odoo 原生行為的關卡」要成對配置：給 context7 ＋ 禁讀／禁掃 core** — 只禁不給等於逼 agent 亂跑。不碰 core 的關卡（merge／wiki）維持 none。
