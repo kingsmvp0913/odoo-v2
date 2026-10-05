@@ -8,8 +8,7 @@ description: Use when the user leaves for the day and wants unattended overnight
 使用者下班前**指定當晚要做哪一件事**，寫成工作單 `docs/nightshift-assignment.md`；夜班照著推進。
 **每一輪都從這份檔案重新開始** —— 對話可能已被 compact、session 可能已重開，所以任何「記在腦子裡」的東西都不算數。狀態一律讀檔。
 
-⚠ 本 skill **不預設題目**。沒有工作單就沒有夜班（見第 2 步）。歷史上它曾綁死在「UI Next 改版」，
-結果那份待辦來源被刪掉之後，交班檔連續 98 輪記「無變化」。題目改由工作單帶入就不會再發生。
+本 skill **不預設題目**。沒有工作單就沒有夜班（見第 2a 步）。
 
 ## 為什麼不靠 compact
 
@@ -76,10 +75,7 @@ cd /home/odoo/odoo-v2/app && npm run test:quiet > /tmp/t.log 2>&1; echo "EXITCOD
 grep -E '^Tests:|^Test Suites:' /tmp/t.log
 ```
 
-判紅綠**只看 `Tests:` 那行**。原因有二，都是這個 repo 的實證：
-
-- `project-routes.test.js` 會在案例通過後嘗試連外部 PostgreSQL，害 Jest 非零結束（CORRECTION-SPEC 自己記的，且**尚未建立乾淨 HEAD 基線**）
-- 本 repo 已因管線吃掉 exit code 誤判三次
+判紅綠**只看 `Tests:` 那行**：本 repo 已因管線吃掉 exit code 誤判三次（`.claude/rules/always.md` 規則 12）。
 
 **動手前先跑一次全跑當基線**，把 `Tests:` 數字寫進交班檔。之後的新紅燈一律先假設是自己造成的。不要在任何地方寫死「既有紅燈清單」——那種清單會腐爛成放過自己錯誤的藉口。
 
@@ -139,7 +135,7 @@ getComputedStyle(document.querySelector('.ui-next-thread-composer')).width
 `getComputedStyle().width` 是縮放前的值，兩者差 10%（893 vs 812）不是 bug。
 **驗 CSS 值看 computed，驗視覺位置才看 rect。**
 
-**改完 `.claude/skills/` 要跑** `node scripts/sync-skills.js`（Codex 讀的是 `.agents/skills/` 的實體副本，不同步時完全沒有徵狀）。
+**改完任何 skill 要跑** `node scripts/sync-skills.js`（來源與副本的規則見 `.claude/rules/always.md` 第 13 條；不同步時完全沒有徵狀）。
 
 ---
 
@@ -227,9 +223,9 @@ MCP 可用（`mcp__godui__*`，111 個元件，2026-08-31 實測）。§9 要校
 
 任一成立就收工，並在交班檔寫明原因：
 
-1. 週額度 ≥ 60%
+1. 週額度 ≥ 工作單的「額度門檻」（沒寫才用 60）
 2. 待辦清空
-3. ~~`RWD_TOKEN` 過期~~ → **已不是停止條件**，自簽一顆即可（見〈驗證：截圖〉）。改為：**截圖環境壞掉且修不好**（例如 playwright 起不來、平台 8771 沒回應）
+3. **截圖環境壞掉且修不好**（例如 playwright 起不來、平台 8771 沒回應）。`RWD_TOKEN` 過期不算——自簽一顆（見〈驗證：截圖〉）
 4. 連續兩輪測試紅燈修不好（陷入迴圈，換人比較快）
 5. 撞到需要使用者拍板、且找不到錨點的事，**且**剩下的待辦都被同一個決定卡住
 
@@ -260,5 +256,4 @@ MCP 可用（`mcp__godui__*`，111 個元件，2026-08-31 實測）。§9 要校
 - <明確排除的範圍>
 ```
 
-**必填是「狀態」「題目」「完成定義」三欄。** 少了「完成定義」夜班會不知道何時該停，
-那就會退化成 98 輪空轉的老毛病。
+**必填是「狀態」「題目」「完成定義」三欄。** 少了「完成定義」夜班會不知道何時該停。

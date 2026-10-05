@@ -10,7 +10,7 @@ description: Use when developing the platform app itself — app/server Node bac
 
 ## 跑測試
 ```bash
-cd app && npm test                                   # 全套（jest --runInBand --forceExit）
+cd app && npm run test:quiet                         # 全套（jest --runInBand --silent；紅了再對單檔跑完整輸出）
 cd app && npx jest server/tests/<name>.test.js       # 單檔
 ```
 - **DB 用 `pg-mem`**（記憶體 Postgres），route 用 `supertest`——測試不碰真 DB、不需服務在跑。
@@ -18,7 +18,7 @@ cd app && npx jest server/tests/<name>.test.js       # 單檔
 - **配對慣例**：每個新 server 模組／route 檔配一個 `app/server/tests/<name>.test.js`（現有 100+ 檔全數如此），修 bug 先補會抓到該 bug 的測試。
 
 ## 後端結構速覽
-- `app/server/*-routes.js`：HTTP API（`index.js` 掛載）；`/ai/*` 端點掛 `loopbackOnly`（只准本機，供 agent curl）。
+- `app/server/*-routes.js`：HTTP API（`index.js` 掛載）；`/ai/*` 端點掛 `aiEndpointGuard` + `requireAiEndpoint('<scope>')`（驗 `X-AIDEV-AI-TOKEN`，供 agent curl）。
 - `app/server/pipeline/`：pipeline 各關 runner 與共用件——agent 定義載入（`agent-loader.js`，改 prompt 先看 **agentPrompt** skill）、`claude-runner.js`（spawn claude CLI）、`runner.js`/`task-agent.js`(流程編排)。
 - `app/server/lib/`:跨模組工具(git、crypto、attachments、ssh-sql…)。
 - `app/server/db.js`:schema 唯一真相(`migrate()` idempotent;加欄位走 ALTER 清單模式)。
@@ -37,7 +37,7 @@ cd app && npx jest server/tests/<name>.test.js       # 單檔
 
 ## Common Mistakes
 - 動 `db.js` schema 忘了走 ALTER 清單（直接改 CREATE TABLE 對既有 DB 無效——`IF NOT EXISTS` 不會補欄位）。
-- 新 `/ai/*` 端點忘掛 `loopbackOnly` → 對外暴露無認證端點。
+- 新 `/ai/*` 端點忘掛 `aiEndpointGuard`／`requireAiEndpoint` → 對外暴露無認證端點（照抄 `ai-platform-routes.js` 既有端點的寫法）。
 - 前端 inline style 寫死 `#fff` 背景 → 深色模式隱形字（上方硬規則）。
 - 改 pipeline agent 的 prompt 或共用片段卻沒看 **agentPrompt** skill → 契約靜默壞掉。
 - 新增 pipeline 關卡只補了後端，前端 `status-labels.js` 沒補 → 該狀態在畫面顯示英文 status（`respec_running` 曾如此漏在列表頁）。

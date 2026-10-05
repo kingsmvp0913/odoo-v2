@@ -11,7 +11,7 @@ description: Use when querying remote PostgreSQL databases via the v2 platform A
 
 ### 第一步：判斷當前專案
 
-依當前處理中的專案、開啟檔案路徑（如 `online_addons/<專案>/`）、對話主題，推斷對應的 v2 專案名稱（folder_name 或 name）。
+依當前處理中的專案、當前任務的 repo 路徑、對話主題，推斷對應的 v2 專案名稱（folder_name 或 name）。
 
 > **互動式 session 要先自己取通行碼與 base URL**（pipeline 派出去的 agent 由平台自動注入，你自己敲的沒有）。
 > 在 repo 根目錄執行一次即可：

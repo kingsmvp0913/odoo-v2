@@ -6,7 +6,7 @@ description: Use when editing pipeline agent prompts (.claude/agents/*.md), shar
 # agentPrompt — pipeline prompt 維運守則
 
 ## Overview
-`.claude/agents/*.md` 是 17 個 pipeline agent 的 prompt。它們**不是普通文件**——每份都掛著機器契約（placeholder、輸出標籤、注入片段），改壞任何一個都是**靜默失敗**：解析不到 → 該關整輪報廢。改 prompt 前先讀本 skill；程式真相在 `app/server/pipeline/agent-loader.js`。
+`.claude/agents/*.md` 是 pipeline agent 的 prompt。它們**不是普通文件**——每份都掛著機器契約（placeholder、輸出標籤、注入片段），改壞任何一個都是**靜默失敗**：解析不到 → 該關整輪報廢。改 prompt 前先讀本 skill；程式真相在 `app/server/pipeline/agent-loader.js`。
 
 ## 鐵則 1：`{{placeholder}}` 逐一原樣保留
 - JS 端 `render(vars)` 會傳入對應資料；移除 placeholder＝資料沒地方放，新增 placeholder＝渲染成空字串（只留 console 告警，agent 拿到空洞 prompt 照跑——最難察覺的準確性殺手）。
@@ -14,8 +14,8 @@ description: Use when editing pipeline agent prompts (.claude/agents/*.md), shar
 - 共用片段的 placeholder 一樣算數：`source-routing.md` 用 `{{repo_paths}}`/`{{main_branch}}`/`{{git_branch}}`；`cs-capability.md` 用 `{{project_name}}`/`{{repo_paths}}`。
 
 ## 鐵則 2：主輸出契約（`<result>` 標籤）
-- **有 `<result>` 契約**（下游用 `agent-result.js` 解析，格式各異——analysis 是 YAML、多數是 JSON）：analysis-project、analysis-reject、chat-to-task、coding-project、cs、feedback-merge、fix-review、health-auditor、health-task、library、merge-explain、qa、qa-retry、reject-classifier、respec-patch、spec-review、wiki-drift-classifier。
-- **沒有、也不得擅自加上**：`merge`（吐裸檔案內容）、`playwright`（吐說明文字）、`chat`（自然語言回覆）、`deploy-fix`。加了 `<result>` 會破壞該關解析。
+- **有 `<result>` 契約**（下游用 `agent-result.js` 解析，格式各異——analysis 是 YAML、多數是 JSON）：除下一條列出的之外全部都有；要確認某一關，`grep -l '<result>' .claude/agents/*.md`。
+- **沒有、也不得擅自加上**：`merge`（吐裸檔案內容）、`playwright-spec`（吐說明文字）、`chat`／`chat-retry`（自然語言回覆）、`deploy-fix`。加了 `<result>` 會破壞該關解析。
 - 改契約格式（欄位增減）必須同步改 JS 解析端與對應測試；只改措辭不用。
 
 ## 鐵則 3：側通道（`<memory>` / `<wiki-drift>`）
@@ -23,7 +23,7 @@ description: Use when editing pipeline agent prompts (.claude/agents/*.md), shar
 - 設計不變量：**選用**（缺＝沒有，不是錯誤）、**解析失敗靜默略過**（不影響主回覆）、**不進使用者可見正文**（chat 顯示前會剝除）。改 chat/cs/cs-capability 時不得動搖這三點。
 - 對應落地：`<memory>` → `troubleshooting.js` 寫 wiki 疑難排解區；`<wiki-drift>` → `wiki-drift.js` 入佇列背景分類。
 
-## 注入架構（agent-loader.js 的十一張名單）
+## 注入架構（agent-loader.js 的 `*_AGENTS` 名單）
 最終 prompt 由上而下：**CLAUDE.md 規則 → plain-language → asking-well → 專案備註 → systematic-debugging
 → source-routing → cs-capability → spec-lookup → must-ask → figma → visual-values → questions-contract
 → agent body**。**這個順序不能隨手改**：片段之間有方位詞互相引用（visual-values 寫「理由見上方【figma】」、
@@ -33,11 +33,11 @@ cs-capability 寫「見下方【figma】」、各 body 寫「見上方【…】�
 
 | 片段 | 注入對象 | 備註 |
 |---|---|---|
-| CLAUDE.md `full`（過濾 `<!-- platform-only -->` 後整份） | analysis-project、analysis-reject、coding-project、playwright-spec、spec-review | platform-only 段（Skills 清單等）不會進 pipeline |
+| CLAUDE.md `full`（過濾 `<!-- platform-only -->` 後整份） | analysis-project、analysis-reject、coding-project、playwright-spec、spec-review、clarify-chat | platform-only 段（Skills 清單等）不會進 pipeline |
 | CLAUDE.md `qa`（只 §1＋§2＋Rule 12） | qa | qa-retry 不注入（--resume 已含 fresh 輪規則） |
 | `systematic-debugging.md` | analysis-reject、coding-project | 診斷／修復型關卡 |
 | `source-routing.md` | analysis-project、coding-project、qa、qa-retry、analysis-reject、playwright-spec | 在客戶 worktree 內作業的關卡 |
-| 專案備註（`project_notes` var） | 開發五關＋chat、chat-to-task、spec-review | 空備註不注入（保 cache 前綴） |
+| 專案備註（`project_notes` var） | 開發五關＋chat、chat-to-task、spec-review、clarify-chat | 空備註不注入（保 cache 前綴） |
 | `cs-capability.md` | chat、cs | **改一處兩關同時生效** |
 | `plain-language.md` | analysis-project、analysis-reject、clarify-chat、spec-review、qa、merge-explain、merge-clarify、cs、chat、chat-to-task、library | 產「給人看的文字」的關 |
 | `asking-well.md` | analysis-project、clarify-chat、analysis-reject、cs | 產「要使用者回答的問題」的關；spec-review／respec-patch 有自己的反問規則但不吃這片段 |
@@ -55,7 +55,7 @@ cs-capability 寫「見下方【figma】」、各 body 寫「見上方【…】�
 ## 改完怎麼驗
 ```bash
 cd app && npx jest server/tests/agent-loader.test.js server/tests/agent-acceptance.test.js server/tests/chat-agent.test.js
-cd app && npm test          # 全套（改共用片段／契約時跑這個）
+cd app && npm run test:quiet   # 全套（改共用片段／契約時跑這個）
 ```
 pipeline 各關的行為測試都在 `app/server/tests/`；改哪個 agent 就找同名／相關 test 檔一併看。
 

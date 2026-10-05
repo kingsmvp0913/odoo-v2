@@ -23,7 +23,7 @@ node .agents/skills/platformDB/query.js --file q.sql             # 從檔讀 SQL
 ## 關鍵表（能回答什麼）
 | 表 | 用途 / 關鍵欄位 |
 |---|---|
-| `tasks` | 任務主表。`status`；彈跳計數 `qa_retry_count` / `pw_retry_count`(E2E) / `deploy_retry_count` / `reentry_count`；`coding_session_id` / `coding_resume_count`；`analysis_yaml`、`git_branch`、`is_paused`、`blocker_content` |
+| `tasks` | 任務主表。`status`；彈跳計數 `qa_retry_count` / `pw_retry_count`(E2E) / `deploy_retry_count` / `reentry_count`；`coding_session_id`、`qa_resume_count` / `analysis_resume_count`；`analysis_yaml`、`git_branch`、`is_paused`、`blocker_content` |
 | `token_usage` | **每關每次執行一筆**。`agent_type`(analysis/coding/qa/playwright/merge/…)、`model`、`input_tokens`、`output_tokens`、`cache_read_tokens`、`cache_create_tokens`、`duration_ms`、`status`(completed/timeout/aborted/error)、`source`(server/ps1)。⚠ `task_id` 是**業務字串 id（TEXT）**，跨表 join 用它、非 `tasks.id` |
 | `task_events` | 終端輸出回放（含階段 marker、失敗原因）。依 `task_id`(整數 FK)、`id` 排序 |
 | `prompt_logs` | 最近 100 筆實際送給 claude 的 prompt（稽核用） |

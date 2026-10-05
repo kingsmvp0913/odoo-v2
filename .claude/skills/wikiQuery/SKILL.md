@@ -8,7 +8,7 @@ description: Use when reading a project's wiki knowledge base from an interactiv
 ## Overview
 每個專案有一套 wiki（概論／模組頁／功能頁／專案備註／疑難排解），存平台 DB 的 `wiki_pages`。互動 session 要查「這個專案某功能怎麼運作、之前排障結論是什麼」走這裡。**需要平台 server 運行於 `$AIDEV_AI_BASE`**；server 沒跑時改用 `platformDB` skill 直查 `wiki_pages` 表。
 
-## 端點（loopback-only，免認證）
+## 端點（需帶 `X-AIDEV-AI-TOKEN`）
 
 > **互動式 session 要先自己取通行碼與 base URL**（pipeline 派出去的 agent 由平台自動注入，你自己敲的沒有）。
 > 在 repo 根目錄執行一次即可：
